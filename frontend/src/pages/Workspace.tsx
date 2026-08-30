@@ -6,18 +6,29 @@ import { MarkdownRenderer } from "../components/MarkdownRenderer";
 import { knowledgeBases, sampleConversation } from "../lib/data";
 import type { Citation, ChatMessage, KnowledgeBase, Source } from "../lib/data";
 import { getConversation, createConversation, updateConversation, titleFrom } from "../lib/chat";
+import { API_BASE } from "../lib/supabase";
 
 function useKB(id: string) {
-  const [kb, setKb] = useState<KnowledgeBase | undefined>(() => knowledgeBases.find((k) => k.id === id));
+  const [kb, setKb] = useState<KnowledgeBase | undefined>(() => {
+    try {
+      const raw = localStorage.getItem("dm_kbs_cache");
+      if (raw) {
+        const list: KnowledgeBase[] = JSON.parse(raw);
+        const found = list.find((k) => k.id === id);
+        if (found) return found;
+      }
+    } catch {}
+    return knowledgeBases.find((k) => k.id === id);
+  });
 
   useEffect(() => {
     const token = localStorage.getItem("dm-token") || "";
     const headers = { Authorization: `Bearer ${token}` };
-    fetch(`http://127.0.0.1:8000/api/v1/knowledge-bases/${id}`, { headers })
+    fetch(`${API_BASE}/knowledge-bases/${id}`, { headers })
       .then((res) => res.json())
       .then((data) => {
         if (data && data.id) {
-          fetch(`http://127.0.0.1:8000/api/v1/sources/kb/${id}`, { headers })
+          fetch(`${API_BASE}/sources/kb/${id}`, { headers })
             .then((sRes) => sRes.json())
             .then((sources) => {
               const formattedSources: Source[] = Array.isArray(sources)
@@ -70,7 +81,7 @@ function WorkspaceHeader({
   const handleRename = async (id: string, name: string, desc: string) => {
     const token = localStorage.getItem("dm-token") || "";
     try {
-      await fetch(`http://127.0.0.1:8000/api/v1/knowledge-bases/${id}`, {
+      await fetch(`${API_BASE}/knowledge-bases/${id}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
@@ -295,7 +306,7 @@ function ChatView({ kb }: { kb: KnowledgeBase }) {
 
     try {
       const token = localStorage.getItem("dm-token") || "";
-      const res = await fetch("http://127.0.0.1:8000/api/v1/chat/query", {
+      const res = await fetch(`${API_BASE}/chat/query`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

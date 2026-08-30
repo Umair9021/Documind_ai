@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Button, Field, Icon, Input, Modal, SourceGlyph, StatusBadge, cx, useToast } from "./ui";
 import type { SourceStatus } from "../lib/data";
+import { API_BASE } from "../lib/supabase";
 
 export function CreateKBModal({ open, onClose, onCreate }: { open: boolean; onClose: () => void; onCreate: (name: string, desc?: string) => void }) {
   const [name, setName] = useState("");
@@ -142,7 +143,7 @@ export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean
       fileList.forEach((f) => formData.append("files", f));
 
       try {
-        const res = await fetch("http://127.0.0.1:8000/api/v1/sources/upload", {
+        const res = await fetch(`${API_BASE}/sources/upload`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${token}`,
@@ -179,7 +180,7 @@ export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean
 
     if (kbId) {
       try {
-        const res = await fetch("http://127.0.0.1:8000/api/v1/sources/youtube", {
+        const res = await fetch(`${API_BASE}/sources/youtube`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

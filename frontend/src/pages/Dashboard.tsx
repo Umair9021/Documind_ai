@@ -5,6 +5,7 @@ import { Button, EmptyState, Icon, SearchInput, Menu, Skeleton, useToast } from 
 import { CreateKBModal, RenameKBModal } from "../components/modals";
 import { knowledgeBases as seedKBs } from "../lib/data";
 import type { KnowledgeBase, Source } from "../lib/data";
+import { API_BASE } from "../lib/supabase";
 
 function useLoaded(delay = 650) {
   const [loaded, setLoaded] = useState(false);
@@ -22,7 +23,7 @@ function KBCard({
   onRename: (kb: KnowledgeBase) => void;
 }) {
   const { navigate } = useRouter();
-  const ready = kb.sources.filter((s) => s.status === "ready").length;
+  const ready = kb.sources ? kb.sources.filter((s) => s.status === "ready").length : 0;
   return (
     <div className="group flex flex-col rounded-2xl border border-border bg-panel p-5 transition-all hover:border-border-strong hover:shadow-sm">
       <div className="flex items-start justify-between">
@@ -35,7 +36,7 @@ function KBCard({
       <h3 className="mt-4 text-[15px] font-semibold tracking-tight">{kb.name}</h3>
       <p className="mt-1 line-clamp-2 flex-1 text-sm leading-relaxed text-muted">{kb.description}</p>
       <div className="mt-4 flex items-center gap-4 font-mono text-xs text-muted">
-        <span className="flex items-center gap-1.5"><Icon name="sources" className="size-3.5" />{kb.sources.length} sources</span>
+        <span className="flex items-center gap-1.5"><Icon name="sources" className="size-3.5" />{kb.sources ? kb.sources.length : 0} sources</span>
         <span className="flex items-center gap-1.5"><Icon name="clock" className="size-3.5" />{kb.updated || "recently"}</span>
       </div>
       <div className="mt-4 flex items-center justify-between border-t border-border pt-4">
@@ -59,9 +60,25 @@ function KBCardSkeleton() {
   );
 }
 
-/* shared optimistic-delete & rename hook with live backend */
+const STORAGE_KEY = "dm_kbs_cache";
+
+function getCachedKBs(): KnowledgeBase[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return [];
+}
+
+function saveCachedKBs(kbs: KnowledgeBase[]) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(kbs));
+  } catch {}
+}
+
+/* shared optimistic-delete & rename hook with live backend and persistent storage */
 function useKBList() {
-  const [kbs, setKbs] = useState<KnowledgeBase[]>([]);
+  const [kbs, setKbs] = useState<KnowledgeBase[]>(getCachedKBs);
   const toast = useToast();
 
   const getHeaders = () => {
@@ -75,7 +92,7 @@ function useKBList() {
   const fetchKBs = async () => {
     const token = localStorage.getItem("dm-token") || "";
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/v1/knowledge-bases/", {
+      const res = await fetch(`${API_BASE}/knowledge-bases/`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
@@ -85,7 +102,7 @@ function useKBList() {
             data.map(async (d: any) => {
               let sourcesList: Source[] = [];
               try {
-                const sRes = await fetch(`http://127.0.0.1:8000/api/v1/sources/kb/${d.id}`, {
+                const sRes = await fetch(`${API_BASE}/sources/kb/${d.id}`, {
                   headers: { Authorization: `Bearer ${token}` },
                 });
                 if (sRes.ok) {
@@ -112,6 +129,7 @@ function useKBList() {
             })
           );
           setKbs(formatted);
+          saveCachedKBs(formatted);
         }
       }
     } catch (e) {}
@@ -124,14 +142,22 @@ function useKBList() {
   const remove = async (kb: KnowledgeBase) => {
     const token = localStorage.getItem("dm-token") || "";
     const index = kbs.findIndex((k) => k.id === kb.id);
-    setKbs((list) => list.filter((k) => k.id !== kb.id));
+    const updated = kbs.filter((k) => k.id !== kb.id);
+    setKbs(updated);
+    saveCachedKBs(updated);
+
     toast(`"${kb.name}" deleted`, "default", {
       label: "Undo",
-      onClick: () => setKbs((list) => { const next = [...list]; next.splice(index, 0, kb); return next; }),
+      onClick: () => {
+        const next = [...updated];
+        next.splice(index, 0, kb);
+        setKbs(next);
+        saveCachedKBs(next);
+      },
     });
 
     try {
-      await fetch(`http://127.0.0.1:8000/api/v1/knowledge-bases/${kb.id}`, {
+      await fetch(`${API_BASE}/knowledge-bases/${kb.id}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -139,35 +165,49 @@ function useKBList() {
   };
 
   const addKB = async (name: string, desc = "") => {
+    const tempId = `kb_${Math.random().toString(36).slice(2, 10)}`;
+    const newKb: KnowledgeBase = {
+      id: tempId,
+      name,
+      description: desc,
+      sources: [],
+      updated: "just now",
+    };
+
+    const nextList = [newKb, ...kbs];
+    setKbs(nextList);
+    saveCachedKBs(nextList);
+    toast(`Knowledge base "${name}" created!`);
+
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/v1/knowledge-bases/", {
+      const res = await fetch(`${API_BASE}/knowledge-bases/`, {
         method: "POST",
         headers: getHeaders(),
         body: JSON.stringify({ name, description: desc }),
       });
       if (res.ok) {
         const created = await res.json();
-        const newKb: KnowledgeBase = {
-          id: created.id,
-          name: created.name,
-          description: created.description || "",
-          sources: [],
-          updated: "just now",
-        };
-        setKbs((prev) => [newKb, ...prev]);
-        return created.id;
+        if (created.id) {
+          const finalKb = { ...newKb, id: created.id };
+          const replaced = [finalKb, ...kbs.filter((k) => k.id !== tempId)];
+          setKbs(replaced);
+          saveCachedKBs(replaced);
+          return created.id;
+        }
       }
     } catch (e) {}
-    return null;
+
+    return tempId;
   };
 
   const renameKB = async (id: string, name: string, desc: string) => {
-    setKbs((prev) =>
-      prev.map((k) => (k.id === id ? { ...k, name, description: desc } : k))
-    );
+    const updated = kbs.map((k) => (k.id === id ? { ...k, name, description: desc } : k));
+    setKbs(updated);
+    saveCachedKBs(updated);
     toast(`Knowledge base updated to "${name}"`);
+
     try {
-      await fetch(`http://127.0.0.1:8000/api/v1/knowledge-bases/${id}`, {
+      await fetch(`${API_BASE}/knowledge-bases/${id}`, {
         method: "PUT",
         headers: getHeaders(),
         body: JSON.stringify({ name, description: desc }),
