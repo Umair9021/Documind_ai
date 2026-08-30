@@ -112,11 +112,7 @@ source venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Create .env from template
-cp .env.example .env
-# Edit .env and fill in your SUPABASE_URL, SUPABASE_ANON_KEY, and GROQ_API_KEY
-
-# Run backend server
+# Run backend server (uses your environment variables or local .env)
 uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 ```
 *API Swagger Documentation: `http://127.0.0.1:8000/docs`*
@@ -131,9 +127,6 @@ cd figma_frontend
 
 # Install dependencies
 npm install
-
-# Create .env from template
-cp .env.example .env
 
 # Run development server
 npm run dev
