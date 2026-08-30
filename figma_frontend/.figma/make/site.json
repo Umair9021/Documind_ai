@@ -1,0 +1,10 @@
+{
+  "description": "This web application enables users to create modern, visually appealing websites with a clean, organized dashboard for effortless management and customization.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

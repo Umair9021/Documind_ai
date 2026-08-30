@@ -1,0 +1,41 @@
+# Node & Frontend
+**/node_modules/
+**/dist/
+**/build/
+**/.next/
+**/.turbo/
+**/.vercel/
+
+# Python & Backend
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+**/env/
+**/venv/
+**/.venv/
+**/ENV/
+
+# Database, Vector Stores & Uploads
+**/data/
+**/chroma_db/
+**/uploads/
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment Variables & Secrets
+**/.env
+**/.env.local
+**/.env.development.local
+**/.env.test.local
+**/.env.production.local
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
