@@ -69,7 +69,7 @@ DocuMind_AI/
 │       ├── rag_service.py        # Groq Llama 3.3-70B grounded answer synthesis
 │       └── evaluator.py          # Benchmark evaluation metrics
 │
-└── figma_frontend/
+└── frontend/
     ├── package.json              # Frontend scripts & dependencies
     ├── vite.config.ts            # Vite build configuration
     ├── index.html                # Entry point
@@ -123,7 +123,7 @@ uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 
 ```bash
 # Navigate to frontend
-cd figma_frontend
+cd frontend
 
 # Install dependencies
 npm install
@@ -153,7 +153,7 @@ npm run dev
 ### Deploy Frontend to Vercel
 
 1. Import your GitHub repository in [Vercel](https://vercel.com).
-2. Set Root Directory to: `figma_frontend`.
+2. Set Root Directory to: `frontend`.
 3. Framework Preset: `Vite`.
 4. Set Environment Variables:
    - `VITE_API_BASE_URL` = `https://your-backend.onrender.com`
