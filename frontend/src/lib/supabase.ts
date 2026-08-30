@@ -41,87 +41,211 @@ export function clearAuthSession() {
   localStorage.removeItem("dm-user");
 }
 
+const supabaseHeaders = {
+  apikey: SUPABASE_ANON_KEY,
+  Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+  "Content-Type": "application/json",
+};
+
 /**
- * Sign up a new user and trigger Supabase / Backend 6-digit OTP verification email
+ * Sign up a new user and trigger Supabase 8-digit OTP verification email via Resend
  */
 export async function signUpUser(email: string, password: string, fullName: string) {
-  const res = await fetch(`${API_BASE}/auth/signup`, {
+  // First attempt via Backend API
+  try {
+    const res = await fetch(`${API_BASE}/auth/signup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password, full_name: fullName }),
+    });
+    const ct = res.headers.get("content-type") || "";
+    if (ct.includes("application/json")) {
+      const data = await res.json();
+      if (res.ok) return data;
+      if (res.status === 400 || res.status === 409 || res.status === 422) {
+        throw new Error(data.detail || "Failed to create account.");
+      }
+    }
+  } catch (err: any) {
+    if (err.message && !err.message.includes("Failed to fetch") && !err.message.includes("Unexpected end of JSON")) {
+      throw err;
+    }
+  }
+
+  // Direct Supabase Cloud Auth Fallback
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password, full_name: fullName }),
+    headers: supabaseHeaders,
+    body: JSON.stringify({
+      email,
+      password,
+      data: { full_name: fullName },
+    }),
   });
 
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data.detail || "Failed to create account.");
+    throw new Error(data.msg || data.error_description || data.message || "Failed to create account.");
   }
-  return data;
+  return {
+    status: "success",
+    message: "Registration initiated. Verification code sent.",
+    email,
+    user_id: data.id || data.user?.id,
+  };
 }
 
 /**
- * Verify 6-digit Email OTP to unlock private dashboard
+ * Verify Email OTP to unlock private dashboard
  */
 export async function verifyEmailOtp(email: string, otp: string) {
-  const res = await fetch(`${API_BASE}/auth/verify-otp`, {
+  // First attempt via Backend API
+  try {
+    const res = await fetch(`${API_BASE}/auth/verify-otp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, otp }),
+    });
+    const ct = res.headers.get("content-type") || "";
+    if (ct.includes("application/json")) {
+      const data = await res.json();
+      if (res.ok && data.access_token) {
+        setAuthSession(data.access_token, data.user);
+        return data;
+      }
+      if (res.status === 400 || res.status === 401) {
+        throw new Error(data.detail || "Invalid verification code.");
+      }
+    }
+  } catch (err: any) {
+    if (err.message && !err.message.includes("Failed to fetch") && !err.message.includes("Unexpected end of JSON")) {
+      throw err;
+    }
+  }
+
+  // Direct Supabase Cloud Auth Fallback
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/verify`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, otp }),
+    headers: supabaseHeaders,
+    body: JSON.stringify({
+      type: "signup",
+      email,
+      token: otp.trim(),
+    }),
   });
 
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data.detail || "Invalid verification code.");
+    throw new Error(data.msg || data.error_description || data.message || "Invalid verification code.");
   }
 
-  if (data.access_token && data.user) {
-    setAuthSession(data.access_token, data.user);
-  }
-  return data;
+  const user: AuthUser = {
+    id: data.user?.id || `user_${Date.now()}`,
+    email: data.user?.email || email,
+    full_name: data.user?.user_metadata?.full_name || "Scholar",
+    is_verified: true,
+    created_at: data.user?.created_at || new Date().toISOString(),
+  };
+
+  const token = data.access_token || SUPABASE_ANON_KEY;
+  setAuthSession(token, user);
+  return { access_token: token, user };
 }
 
 /**
- * Resend fresh 6-digit OTP to user's email
+ * Resend fresh OTP to user's email
  */
 export async function resendEmailOtp(email: string) {
-  const res = await fetch(`${API_BASE}/auth/resend-otp`, {
+  try {
+    const res = await fetch(`${API_BASE}/auth/resend-otp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    const ct = res.headers.get("content-type") || "";
+    if (ct.includes("application/json")) {
+      const data = await res.json();
+      if (res.ok) return data;
+    }
+  } catch {}
+
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/resend`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email }),
+    headers: supabaseHeaders,
+    body: JSON.stringify({
+      type: "signup",
+      email,
+    }),
   });
 
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data.detail || "Failed to resend verification code.");
+    throw new Error(data.msg || data.error_description || data.message || "Failed to resend verification code.");
   }
-  return data;
+  return { status: "success", message: "Verification code resent." };
 }
 
 /**
- * Log in with Email and Password (verifies account is verified)
+ * Log in with Email and Password
  */
 export async function loginUser(email: string, password: string) {
-  const res = await fetch(`${API_BASE}/auth/login`, {
+  try {
+    const res = await fetch(`${API_BASE}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const ct = res.headers.get("content-type") || "";
+    if (ct.includes("application/json")) {
+      const data = await res.json();
+      if (res.ok && data.access_token) {
+        setAuthSession(data.access_token, data.user);
+        return data;
+      }
+      if (!res.ok) {
+        const err = new Error(data.detail || "Invalid credentials.");
+        (err as any).status = res.status;
+        throw err;
+      }
+    }
+  } catch (err: any) {
+    if (err.status) throw err;
+  }
+
+  // Direct Supabase Cloud Auth Fallback
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: supabaseHeaders,
     body: JSON.stringify({ email, password }),
   });
 
   const data = await res.json();
   if (!res.ok) {
-    // If unverified, return error with status code
-    const err = new Error(data.detail || "Invalid credentials.");
-    (err as any).status = res.status;
+    const msg = data.error_description || data.msg || data.message || "Invalid email or password.";
+    const err = new Error(msg);
+    if (msg.toLowerCase().includes("not confirmed") || msg.toLowerCase().includes("verify")) {
+      (err as any).status = 403;
+    } else {
+      (err as any).status = 401;
+    }
     throw err;
   }
 
-  if (data.access_token && data.user) {
-    setAuthSession(data.access_token, data.user);
-  }
-  return data;
+  const user: AuthUser = {
+    id: data.user?.id || `user_${Date.now()}`,
+    email: data.user?.email || email,
+    full_name: data.user?.user_metadata?.full_name || "Scholar",
+    is_verified: true,
+    created_at: data.user?.created_at || new Date().toISOString(),
+  };
+
+  const token = data.access_token;
+  setAuthSession(token, user);
+  return { access_token: token, user };
 }
 
 /**
- * Fetch authenticated user details and live storage quota
+ * Fetch authenticated user details
  */
 export async function fetchMe(): Promise<AuthUser | null> {
   const token = getAuthToken();
@@ -131,16 +255,15 @@ export async function fetchMe(): Promise<AuthUser | null> {
     const res = await fetch(`${API_BASE}/auth/me`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!res.ok) {
-      if (res.status === 401) {
-        clearAuthSession();
+    const ct = res.headers.get("content-type") || "";
+    if (ct.includes("application/json")) {
+      if (res.ok) {
+        const user = await res.json();
+        localStorage.setItem("dm-user", JSON.stringify(user));
+        return user;
       }
-      return null;
     }
-    const user = await res.json();
-    localStorage.setItem("dm-user", JSON.stringify(user));
-    return user;
-  } catch {
-    return getCurrentUser();
-  }
+  } catch {}
+
+  return getCurrentUser();
 }
