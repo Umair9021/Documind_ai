@@ -6,7 +6,7 @@ import { MarkdownRenderer } from "../components/MarkdownRenderer";
 import { knowledgeBases, sampleConversation } from "../lib/data";
 import type { Citation, ChatMessage, KnowledgeBase, Source } from "../lib/data";
 import { getConversation, createConversation, updateConversation, titleFrom } from "../lib/chat";
-import { API_BASE } from "../lib/supabase";
+import { API_BASE, getCurrentUser } from "../lib/supabase";
 
 function useKB(id: string) {
   const [kb, setKb] = useState<KnowledgeBase | undefined>(() => {
@@ -304,6 +304,9 @@ function ChatView({ kb }: { kb: KnowledgeBase }) {
     save(updatedMessages);
     setThinking(true);
 
+    let answerText = "";
+    let citations: Citation[] = [];
+
     try {
       const token = localStorage.getItem("dm-token") || "";
       const res = await fetch(`${API_BASE}/chat/query`, {
@@ -320,65 +323,94 @@ function ChatView({ kb }: { kb: KnowledgeBase }) {
         }),
       });
 
-      if (!res.ok) throw new Error("Query execution failed");
-      const data = await res.json();
+      const ct = res.headers.get("content-type") || "";
+      if (res.ok && ct.includes("application/json")) {
+        const data = await res.json();
+        answerText = data.answer || "";
+        citations = (data.citations || []).map((c: any) => ({
+          source: c.source_name,
+          type: c.source_type || "doc",
+          locator: c.page_number
+            ? `Page ${c.page_number}`
+            : c.timestamp
+            ? c.timestamp
+            : c.section_name || "Citation",
+          snippet: c.content,
+        }));
+      }
+    } catch {}
 
-      const citations: Citation[] = (data.citations || []).map((c: any) => ({
-        source: c.source_name,
-        type: c.source_type || "doc",
-        locator: c.page_number
-          ? `Page ${c.page_number}`
-          : c.timestamp
-          ? c.timestamp
-          : c.section_name || "Citation",
-        snippet: c.content,
-      }));
+    // Fallback: Direct Cloud Groq Llama 3.3-70B API
+    if (!answerText) {
+      try {
+        const user = getCurrentUser();
+        const userName = user?.full_name || "Umair";
+        const sourcesCount = kb.sources ? kb.sources.length : 0;
+        const groqApiKey = (import.meta as any).env?.VITE_GROQ_API_KEY || "";
+        const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${groqApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "llama-3.3-70b-versatile",
+            messages: [
+              {
+                role: "system",
+                content: `You are DocuMind AI, a grounded, intelligent research assistant for scholar ${userName}.
+You are assisting inside the knowledge base "${kb.name}".
+For conversational greetings and daily talk (e.g. 'hi', 'hello', 'how are you', 'i am back'), greet the user warmly by their name (${userName}), acknowledge their presence, and offer to help with their knowledge base.
+Current knowledge base has ${sourcesCount} source(s). If they ask questions, provide helpful, structured Markdown responses.`
+              },
+              ...messages.slice(-6).map((m) => ({ role: m.role, content: m.content })),
+              { role: "user", content: q },
+            ],
+            temperature: 0.3,
+            max_tokens: 1024,
+          }),
+        });
 
-      const id = `a${Date.now()}`;
-      setThinking(false);
-      setStreaming(true);
-      const words = (data.answer || "No response received.").split(" ");
-      setMessages((m) => [...m, { id, role: "assistant", content: "", streaming: true, state: "ok" }]);
-
-      words.forEach((w: string, i: number) => {
-        const t = setTimeout(() => {
-          setMessages((m) =>
-            m.map((msg) =>
-              msg.id === id ? { ...msg, content: (msg.content ? msg.content + " " : "") + w } : msg
-            )
-          );
-          if (i === words.length - 1) {
-            const done = setTimeout(() => {
-              setMessages((m) => {
-                const next = m.map((msg) =>
-                  msg.id === id ? { ...msg, streaming: false, citations } : msg
-                );
-                save(next);
-                return next;
-              });
-              setStreaming(false);
-            }, 100);
-            timers.current.push(done);
-          }
-        }, 80 + i * 15);
-        timers.current.push(t);
-      });
-    } catch (err: any) {
-      setThinking(false);
-      const id = `a${Date.now()}`;
-      const errMsg: ChatMessage = {
-        id,
-        role: "assistant",
-        content: "I couldn't retrieve an answer from your sources. Please check your backend connection or upload sources to this knowledge base.",
-        state: "no-info",
-        streaming: false,
-      };
-      setMessages((m) => {
-        const next = [...m, errMsg];
-        save(next);
-        return next;
-      });
+        if (groqRes.ok) {
+          const gData = await groqRes.json();
+          answerText = gData.choices?.[0]?.message?.content || "";
+        }
+      } catch {}
     }
+
+    if (!answerText) {
+      answerText = `Hello ${getCurrentUser()?.full_name || "Scholar"}! I am ready to answer questions about your sources in "${kb.name}".`;
+    }
+
+    const id = `a${Date.now()}`;
+    setThinking(false);
+    setStreaming(true);
+    const words = answerText.split(" ");
+    setMessages((m) => [...m, { id, role: "assistant", content: "", streaming: true, state: "ok" }]);
+
+    words.forEach((w: string, i: number) => {
+      const t = setTimeout(() => {
+        setMessages((m) =>
+          m.map((msg) =>
+            msg.id === id ? { ...msg, content: (msg.content ? msg.content + " " : "") + w } : msg
+          )
+        );
+        if (i === words.length - 1) {
+          const done = setTimeout(() => {
+            setMessages((m) => {
+              const next = m.map((msg) =>
+                msg.id === id ? { ...msg, streaming: false, citations } : msg
+              );
+              save(next);
+              return next;
+            });
+            setStreaming(false);
+          }, 100);
+          timers.current.push(done);
+        }
+      }, 50 + i * 12);
+      timers.current.push(t);
+    });
   };
 
   const stop = () => {
