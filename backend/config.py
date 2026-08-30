@@ -3,7 +3,11 @@ from pathlib import Path
 
 # Base Directories
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
+if os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
+    DATA_DIR = Path("/tmp/documind_data")
+else:
+    DATA_DIR = BASE_DIR / "data"
+
 UPLOAD_DIR = DATA_DIR / "uploads"
 CHROMA_DIR = DATA_DIR / "chroma_db"
 

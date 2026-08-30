@@ -3,7 +3,10 @@
 export const SUPABASE_URL = "https://ycajybustcsijaazmwue.supabase.co";
 export const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljYWp5YnVzdGNzaWphYXptd3VlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5ODkzNzAsImV4cCI6MjEwMzU2NTM3MH0.4SasDdX3WzjxXehYvAJuTiswBC3pO-JFeVtXXoCCE4w";
 
-export const API_BASE = "http://127.0.0.1:8000/api/v1";
+const isLocal = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+export const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL
+  ? `${(import.meta as any).env.VITE_API_BASE_URL.replace(/\/$/, "")}/api/v1`
+  : (isLocal ? "http://127.0.0.1:8000/api/v1" : "/api/v1");
 
 export interface AuthUser {
   id: string;

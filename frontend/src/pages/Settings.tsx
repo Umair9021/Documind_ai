@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { PageHeader } from "../components/AppShell";
 import { Button, Field, Icon, Input, Skeleton, cx, useToast } from "../components/ui";
+import { API_BASE } from "../lib/supabase";
 
 const tabs = [
   { id: "account", label: "Account", icon: "user" as const },
@@ -87,9 +88,9 @@ export function Settings() {
       const headers = { Authorization: `Bearer ${token}` };
       try {
         const [pRes, sRes, uRes] = await Promise.all([
-          fetch("http://127.0.0.1:8000/api/v1/settings/profile", { headers }),
-          fetch("http://127.0.0.1:8000/api/v1/settings/", { headers }),
-          fetch("http://127.0.0.1:8000/api/v1/settings/usage", { headers }),
+          fetch(`${API_BASE}/settings/profile`, { headers }),
+          fetch(`${API_BASE}/settings/`, { headers }),
+          fetch(`${API_BASE}/settings/usage`, { headers }),
         ]);
 
         if (pRes.ok) {
@@ -123,7 +124,7 @@ export function Settings() {
   const saveAccount = async () => {
     setSaving(true);
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/v1/settings/profile", {
+      const res = await fetch(`${API_BASE}/settings/profile`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -146,7 +147,7 @@ export function Settings() {
   const saveAISettings = async () => {
     setSaving(true);
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/v1/settings/", {
+      const res = await fetch(`${API_BASE}/settings/`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -168,7 +169,7 @@ export function Settings() {
   const saveRetrievalSettings = async () => {
     setSaving(true);
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/v1/settings/", {
+      const res = await fetch(`${API_BASE}/settings/`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
