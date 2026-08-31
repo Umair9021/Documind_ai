@@ -26,28 +26,57 @@ export async function extractTextFromFile(file: File): Promise<string> {
     });
   }
 
-  // Binary (PDF / DOCX fallback text stream extraction)
+  // Real PDF Decompression & Text Extraction via Mozilla PDF.js
+  if (ext === "pdf") {
+    try {
+      if (!(window as any).pdfjsLib) {
+        await new Promise<void>((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+          script.onload = () => {
+            (window as any).pdfjsLib.GlobalWorkerOptions.workerSrc =
+              "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+            resolve();
+          };
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      }
+
+      const pdfjsLib = (window as any).pdfjsLib;
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      let fullText = "";
+
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items
+          .map((item: any) => item.str)
+          .join(" ")
+          .trim();
+        if (pageText) {
+          fullText += `[Page ${i}]\n${pageText}\n\n`;
+        }
+      }
+
+      if (fullText.trim().length > 20) {
+        return fullText.trim();
+      }
+    } catch (err) {
+      console.warn("Client PDF.js error, falling back to stream reader:", err);
+    }
+  }
+
+  // DOCX / Binary text fallback
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = () => {
       const buffer = reader.result as ArrayBuffer;
       const decoder = new TextDecoder("utf-8", { fatal: false });
       const raw = decoder.decode(buffer);
-      
-      // Extract ASCII/printable strings of 4+ characters
-      const matches = raw.match(/[\x20-\x7E\r\n\t]{4,}/g) || [];
-      const clean = matches
-        .filter((s) => !s.startsWith("%PDF") && !s.includes("obj") && !s.includes("endobj") && !s.includes("/Filter"))
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
-
-      if (clean.length > 50) {
-        resolve(clean);
-      } else {
-        // Generative descriptive text if file is purely binary
-        resolve(`Document content for ${file.name}: ${(file.size / 1024).toFixed(1)} KB ${ext.toUpperCase()} document.`);
-      }
+      const clean = raw.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, " ").replace(/\s+/g, " ").trim();
+      resolve(clean.slice(0, 50000));
     };
     reader.onerror = () => resolve("");
     reader.readAsArrayBuffer(file);
