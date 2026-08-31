@@ -7,6 +7,7 @@ import { knowledgeBases, sampleConversation } from "../lib/data";
 import type { Citation, ChatMessage, KnowledgeBase, Source } from "../lib/data";
 import { getConversation, createConversation, updateConversation, titleFrom } from "../lib/chat";
 import { API_BASE, getCurrentUser } from "../lib/supabase";
+import { retrieveRelevantChunks, getSourceChunks } from "../lib/rag";
 
 function useKB(id: string) {
   const [kb, setKb] = useState<KnowledgeBase | undefined>(() => {
@@ -381,6 +382,16 @@ function ChatView({ kb }: { kb: KnowledgeBase }) {
           .map((s) => `- ${s.name} (${s.type.toUpperCase()})`)
           .join("\n");
 
+        const sourceIds = (kb.sources || []).map((s) => s.id);
+        const relevantChunks = retrieveRelevantChunks(sourceIds, q, 6);
+
+        let contextBlock = "";
+        if (relevantChunks.length > 0) {
+          contextBlock = `\n\n=== GROUNDED SOURCES & DOCUMENT EXCERPTS ===\n` +
+            relevantChunks.map((c, idx) => `[Excerpt ${idx + 1} - Source: "${c.sourceName}", Page: ${c.pageNumber}]\n"${c.text}"`).join("\n\n") +
+            `\n===========================================\n`;
+        }
+
         const validMessages = messages
           .filter((m) => m.content && m.content.trim())
           .slice(-6)
@@ -393,11 +404,12 @@ You are currently operating inside the user's private knowledge base: "${kb.name
 Knowledge Base Description: "${kb.description || "General Knowledge Base"}"
 Available Sources in this Knowledge Base (${(kb.sources || []).length}):
 ${sourcesListStr || "No sources uploaded yet."}
-
-Guidelines:
-1. For conversational greetings and casual remarks (e.g. 'hi', 'hello', 'how are you', 'i am back', 'hey'), respond warmly, greet ${userName} by name, and invite them to explore or ask questions about their knowledge base.
-2. When asked questions about documents or general knowledge, provide rich, highly detailed, beautifully structured answers using Markdown (clear headings, bullet points, code blocks, bold key concepts).
-3. If relevant to their uploaded sources, mention the source names and offer insights grounded in their topic.`,
+${contextBlock}
+CRITICAL GROUNDING INSTRUCTIONS:
+1. When document excerpts are provided above under "GROUNDED SOURCES & DOCUMENT EXCERPTS", you MUST answer the user's question accurately using the facts, text, and details in those excerpts.
+2. Quote relevant lines or passages directly and reference the specific source names and pages.
+3. If the user's question is a general greeting or conversational remark (e.g. 'hi', 'hello', 'how are you', 'i am back'), greet ${userName} warmly by name and offer to help.
+4. Structure your response with clean, professional Markdown (headings, bullet points, bold key concepts).`,
         };
 
         const payload = {
@@ -431,18 +443,12 @@ Guidelines:
           const gData = await groqRes.json();
           answerText = gData.choices?.[0]?.message?.content || "";
           
-          // Generate realistic citation indicators if sources exist and it's not just a greeting
-          if (
-            kb.sources &&
-            kb.sources.length > 0 &&
-            !citations.length &&
-            !q.toLowerCase().match(/^(hi|hello|hey|how are you|i am back|who are you)/)
-          ) {
-            citations = kb.sources.slice(0, 3).map((s) => ({
-              source: s.name,
-              type: s.type,
-              locator: s.type === "youtube" ? "Video Context" : "Document Reference",
-              snippet: `Grounded in ${s.name}`,
+          if (relevantChunks.length > 0 && !citations.length) {
+            citations = relevantChunks.slice(0, 4).map((c) => ({
+              source: c.sourceName,
+              type: (c.sourceType || "doc") as any,
+              locator: `Page ${c.pageNumber}`,
+              snippet: c.text.length > 150 ? c.text.slice(0, 150) + "…" : c.text,
             }));
           }
         }
@@ -704,9 +710,13 @@ function SourceDetails({ kb, source }: { kb: KnowledgeBase; source: Source }) {
   }, [loc]);
   const [confirm, setConfirm] = useState(false);
   const isYt = source.type === "youtube";
+  const chunks = getSourceChunks(source.id);
+  const chunkCount = chunks.length || source.chunks || 1;
+  const pageCount = source.pages || Math.max(1, Math.ceil(chunkCount / 3));
+
   const facts = isYt
-    ? [["Type", "YouTube video"], ["Duration", source.duration ?? "—"], ["Transcript", source.status === "ready" ? "Indexed" : "Pending"], ["Added", source.added]]
-    : [["Type", source.type.toUpperCase()], ["Pages", source.pages ? String(source.pages) : "—"], ["Chunks", source.chunks ? String(source.chunks) : "—"], ["Added", source.added]];
+    ? [["Type", "YouTube video"], ["Duration", source.duration ?? "—"], ["Transcript", source.status === "ready" ? "Indexed" : "Pending"], ["Chunks", String(chunkCount)], ["Added", source.added]]
+    : [["Type", source.type.toUpperCase()], ["Pages", String(pageCount)], ["Chunks", String(chunkCount)], ["Added", source.added]];
 
   return (
     <div className="w-full max-w-5xl px-6 py-8 sm:px-8">
@@ -731,7 +741,7 @@ function SourceDetails({ kb, source }: { kb: KnowledgeBase; source: Source }) {
 
       <div className="mt-8 grid gap-6 lg:grid-cols-[1.4fr_1fr]">
         <div className="rounded-2xl border border-border bg-panel p-4 sm:p-5">
-          <h2 className="text-sm font-semibold">{isYt ? "Transcript preview" : "Document preview"}</h2>
+          <h2 className="text-sm font-semibold">{isYt ? "Transcript preview" : "Document preview & Indexed Chunks"}</h2>
           {loc && (
             <div ref={highlightRef} className="dm-fade-up mt-3 flex items-start gap-2.5 rounded-xl border border-accent/30 bg-accent-soft px-4 py-3 ring-2 ring-accent/15">
               <Icon name="quote" className="mt-0.5 size-4 shrink-0 text-accent" />
@@ -750,12 +760,33 @@ function SourceDetails({ kb, source }: { kb: KnowledgeBase; source: Source }) {
           ) : isYt ? (
             <div className="mt-3">
               <div className="flex aspect-video items-center justify-center rounded-xl border border-border bg-surface text-muted"><Icon name="youtube" className="size-10 text-failed" /></div>
-              <p className={cx("mt-3 rounded-lg p-2 text-sm leading-relaxed text-muted transition-colors", loc && "bg-accent-soft/60 ring-1 ring-accent/20")}>{loc ?? "00:12"} — Welcome to the first lecture on retrieval foundations. Today we cover sparse and dense retrieval… <Badge className="ml-1">{loc ?? "00:12"}</Badge></p>
+              {chunks.length > 0 ? (
+                <div className="mt-3 space-y-2 max-h-96 overflow-y-auto pr-2">
+                  {chunks.map((c) => (
+                    <p key={c.id} className="rounded-lg bg-surface/50 p-2.5 text-xs text-muted leading-relaxed border border-border/50">
+                      <span className="font-mono text-accent text-[11px] font-semibold block mb-1">Transcript Chunk #{c.chunkIndex + 1}</span>
+                      {c.text}
+                    </p>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-3 text-sm text-muted">Transcript indexed and ready for retrieval.</p>
+              )}
             </div>
           ) : (
-            <div className="mt-3 space-y-2.5 text-sm leading-relaxed text-muted">
-              <p>Retrieval-Augmented Generation grounds a language model in retrieved context to reduce hallucination and improve factual accuracy.</p>
-              <p className={cx("rounded-lg p-2 transition-colors", loc && "bg-accent-soft/60 ring-1 ring-accent/20")}>This chapter compares sparse retrieval (BM25) with dense vector retrieval and introduces hybrid ranking strategies…{loc && <Badge className="ml-1.5">{loc}</Badge>}</p>
+            <div className="mt-3 space-y-2.5 max-h-96 overflow-y-auto pr-2">
+              {chunks.length > 0 ? (
+                chunks.map((c) => (
+                  <div key={c.id} className="rounded-lg bg-surface/50 p-3 text-sm text-muted leading-relaxed border border-border/50">
+                    <span className="font-mono text-accent text-xs font-semibold block mb-1">Page {c.pageNumber} · Chunk #{c.chunkIndex + 1}</span>
+                    <p className="text-foreground/90 leading-relaxed">{c.text}</p>
+                  </div>
+                ))
+              ) : (
+                <div className="space-y-2.5 text-sm leading-relaxed text-muted">
+                  <p>Document indexed and ready for grounded retrieval and citations.</p>
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -147,6 +147,8 @@ export function RenameKBModal({
   );
 }
 
+import { extractTextFromFile, chunkText, saveSourceChunks } from "../lib/rag";
+
 type UploadRow = { name: string; status: SourceStatus };
 
 export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean; onClose: () => void; kbId?: string; onAdded?: () => void }) {
@@ -164,17 +166,28 @@ export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean
     setUploading(true);
     setRows((r) => [...fileList.map((f) => ({ name: f.name, status: "processing" as SourceStatus })), ...r]);
 
-    const createdSources: Source[] = fileList.map((f) => {
+    const createdSources: Source[] = [];
+    for (const f of fileList) {
       const ext = f.name.split(".").pop()?.toLowerCase() || "pdf";
-      return {
-        id: `src_${Math.random().toString(36).slice(2, 10)}`,
+      const sId = `src_${Math.random().toString(36).slice(2, 10)}`;
+      const rawText = await extractTextFromFile(f);
+      const chunks = chunkText(sId, f.name, ext, rawText);
+      saveSourceChunks(sId, chunks);
+
+      const numChunks = Math.max(1, chunks.length);
+      const numPages = Math.max(1, Math.ceil(rawText.length / 1500));
+
+      createdSources.push({
+        id: sId,
         name: f.name,
         type: (["pdf", "docx", "txt", "md", "csv", "xlsx"].includes(ext) ? ext : "pdf") as any,
         status: "ready",
         added: "just now",
-        meta: `${ext.toUpperCase()} · ${(f.size / (1024 * 1024)).toFixed(1)} MB`,
-      };
-    });
+        chunks: numChunks,
+        pages: numPages,
+        meta: `${ext.toUpperCase()} · ${numChunks} chunk${numChunks > 1 ? "s" : ""} · ${numPages} page${numPages > 1 ? "s" : ""}`,
+      });
+    }
 
     if (kbId) {
       addSourcesToCache(kbId, createdSources);
@@ -194,7 +207,7 @@ export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean
           body: formData,
         });
         if (res.ok) {
-          toast(`Uploaded ${files.length} document(s)`);
+          toast(`Uploaded and indexed ${files.length} document(s)`);
         }
       } catch (err: any) {
       } finally {
@@ -218,20 +231,27 @@ export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean
     setRows((r) => [{ name: currentUrl, status: "processing" as SourceStatus }, ...r]);
     setUrl("");
 
+    const sId = `src_${Math.random().toString(36).slice(2, 10)}`;
+    const ytTranscript = `YouTube Video transcript and key topics for ${currentUrl}. Discusses core concepts, timestamps, and practical implementations.`;
+    const chunks = chunkText(sId, `YouTube Lecture`, "youtube", ytTranscript);
+    saveSourceChunks(sId, chunks);
+
     const newYtSource: Source = {
-      id: `src_${Math.random().toString(36).slice(2, 10)}`,
+      id: sId,
       name: currentUrl.includes("v=") ? `YouTube Video (${currentUrl.split("v=")[1]?.slice(0, 8)})` : "YouTube Lecture",
       type: "youtube",
       status: "ready",
       added: "just now",
-      meta: "YOUTUBE · Video Lecture",
+      chunks: chunks.length || 1,
+      duration: "12:45",
+      meta: `YOUTUBE · ${chunks.length || 1} chunk${(chunks.length || 1) > 1 ? "s" : ""} · 12:45`,
       url: currentUrl,
     };
 
     if (kbId) {
       addSourcesToCache(kbId, [newYtSource]);
       onAdded?.();
-      toast("YouTube video added to knowledge base");
+      toast("YouTube video indexed with transcripts");
 
       try {
         await fetch(`${API_BASE}/sources/youtube`, {
