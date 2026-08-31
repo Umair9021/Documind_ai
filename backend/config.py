@@ -3,6 +3,8 @@ from pathlib import Path
 
 # Base Directories
 BASE_DIR = Path(__file__).resolve().parent
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["CHROMA_TELEMETRY__OPTOUT"] = "1"
 if os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
     DATA_DIR = Path("/tmp/documind_data")
 else:
