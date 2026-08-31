@@ -1,33 +1,37 @@
 import uuid
 from typing import List, Dict, Any
 
-# Multi-version LangChain text splitter with resilient pure-Python fallback
-try:
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-except ImportError:
-    try:
-        from langchain.text_splitter import RecursiveCharacterTextSplitter
-    except ImportError:
-        class RecursiveCharacterTextSplitter:
-            def __init__(self, chunk_size=500, chunk_overlap=50, separators=None):
-                self.chunk_size = chunk_size
-                self.chunk_overlap = chunk_overlap
+class RecursiveCharacterTextSplitter:
+    """Pure-Python high-speed recursive character text splitter with zero heavy dependencies"""
+    def __init__(self, chunk_size=500, chunk_overlap=50, separators=None):
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self.separators = separators or ["\n\n", "\n", ". ", " ", ""]
 
-            def split_text(self, text: str) -> List[str]:
-                if not text:
-                    return []
-                if len(text) <= self.chunk_size:
-                    return [text]
-                chunks = []
-                start = 0
-                step = max(1, self.chunk_size - self.chunk_overlap)
-                while start < len(text):
-                    end = min(len(text), start + self.chunk_size)
-                    chunks.append(text[start:end])
-                    if end == len(text):
+    def split_text(self, text: str) -> List[str]:
+        if not text:
+            return []
+        if len(text) <= self.chunk_size:
+            return [text]
+        
+        chunks = []
+        start = 0
+        step = max(1, self.chunk_size - self.chunk_overlap)
+        while start < len(text):
+            end = min(len(text), start + self.chunk_size)
+            # Try to break cleanly at nearest separator
+            if end < len(text):
+                sub = text[start:end]
+                for sep in self.separators:
+                    idx = sub.rfind(sep)
+                    if idx > self.chunk_size // 2:
+                        end = start + idx + len(sep)
                         break
-                    start += step
-                return chunks
+            chunks.append(text[start:end].strip())
+            if end >= len(text):
+                break
+            start = end - self.chunk_overlap if end - self.chunk_overlap > start else start + step
+        return [c for c in chunks if c]
 
 try:
     from backend.config import DEFAULT_CHUNK_SIZE, DEFAULT_CHUNK_OVERLAP
