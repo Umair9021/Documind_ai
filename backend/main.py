@@ -40,13 +40,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include Routers
-app.include_router(auth.router, prefix=API_V1_STR)
-app.include_router(knowledge_bases.router, prefix=API_V1_STR)
-app.include_router(sources.router, prefix=API_V1_STR)
-app.include_router(chat.router, prefix=API_V1_STR)
-app.include_router(advanced.router, prefix=API_V1_STR)
-app.include_router(settings.router, prefix=API_V1_STR)
+# Include Routers with multiple prefix aliases to support direct and rewritten Vercel paths
+for prefix in [API_V1_STR, "/api", ""]:
+    app.include_router(auth.router, prefix=prefix)
+    app.include_router(knowledge_bases.router, prefix=prefix)
+    app.include_router(sources.router, prefix=prefix)
+    app.include_router(chat.router, prefix=prefix)
+    app.include_router(advanced.router, prefix=prefix)
+    app.include_router(settings.router, prefix=prefix)
 
 @app.get("/")
 def root():
