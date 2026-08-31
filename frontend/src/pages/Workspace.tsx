@@ -21,33 +21,48 @@ function useKB(id: string) {
     return knowledgeBases.find((k) => k.id === id);
   });
 
+  const reloadKB = () => {
+    try {
+      const raw = localStorage.getItem("dm_kbs_cache");
+      if (raw) {
+        const list: KnowledgeBase[] = JSON.parse(raw);
+        const found = list.find((k) => k.id === id);
+        if (found) {
+          setKb({ ...found, sources: [...(found.sources || [])] });
+          return;
+        }
+      }
+    } catch {}
+  };
+
   useEffect(() => {
+    reloadKB();
     const token = localStorage.getItem("dm-token") || "";
     const headers = { Authorization: `Bearer ${token}` };
     fetch(`${API_BASE}/knowledge-bases/${id}`, { headers })
-      .then((res) => res.json())
+      .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data && data.id) {
           fetch(`${API_BASE}/sources/kb/${id}`, { headers })
-            .then((sRes) => sRes.json())
+            .then((sRes) => (sRes.ok ? sRes.json() : null))
             .then((sources) => {
-              const formattedSources: Source[] = Array.isArray(sources)
-                ? sources.map((s: any) => ({
-                    id: s.id,
-                    name: s.name,
-                    type: s.source_type || "pdf",
-                    status: s.status || "ready",
-                    added: "recently",
-                    meta: `${(s.source_type || "doc").toUpperCase()}${s.file_size_bytes ? ` · ${(s.file_size_bytes / (1024 * 1024)).toFixed(1)} MB` : ""}`,
-                  }))
-                : [];
-              setKb({
-                id: data.id,
-                name: data.name,
-                description: data.description || "",
-                sources: formattedSources,
-                updated: "Recently active",
-              });
+              if (Array.isArray(sources) && sources.length > 0) {
+                const formattedSources: Source[] = sources.map((s: any) => ({
+                  id: s.id,
+                  name: s.name,
+                  type: s.source_type || "pdf",
+                  status: s.status || "ready",
+                  added: "recently",
+                  meta: `${(s.source_type || "doc").toUpperCase()}${s.file_size_bytes ? ` · ${(s.file_size_bytes / (1024 * 1024)).toFixed(1)} MB` : ""}`,
+                }));
+                setKb({
+                  id: data.id,
+                  name: data.name,
+                  description: data.description || "",
+                  sources: formattedSources,
+                  updated: "Recently active",
+                });
+              }
             })
             .catch(() => {});
         }
@@ -59,7 +74,7 @@ function useKB(id: string) {
     setKb((prev) => (prev ? { ...prev, name, description: desc } : prev));
   };
 
-  return { kb, updateKBName };
+  return { kb, updateKBName, reloadKB };
 }
 
 function WorkspaceHeader({
@@ -67,11 +82,13 @@ function WorkspaceHeader({
   tab,
   sourceName,
   onRenamed,
+  onSourcesChanged,
 }: {
   kb: KnowledgeBase;
   tab: "chat" | "sources";
   sourceName?: string;
   onRenamed?: (name: string, desc: string) => void;
+  onSourcesChanged?: () => void;
 }) {
   const { navigate } = useRouter();
   const [add, setAdd] = useState(false);
@@ -101,6 +118,7 @@ function WorkspaceHeader({
       ? [{ label: "Sources", to: `/knowledge-bases/${kb.id}/sources` }, { label: sourceName }]
       : []),
   ];
+  const sourcesCount = kb.sources ? kb.sources.length : 0;
   return (
     <div className="border-b border-border bg-panel">
       <div className="w-full px-4 pt-3 sm:px-8 sm:pt-5">
@@ -109,7 +127,7 @@ function WorkspaceHeader({
           <div className="min-w-0 flex items-center gap-2">
             <div>
               <h1 className="truncate text-base sm:text-xl font-semibold tracking-tight">{kb.name}</h1>
-              <p className="mt-0.5 font-mono text-[11px] sm:text-xs text-muted">{kb.sources.length} sources · updated {kb.updated}</p>
+              <p className="mt-0.5 font-mono text-[11px] sm:text-xs text-muted">{sourcesCount} sources · updated {kb.updated}</p>
             </div>
             <button
               onClick={() => setRenameModal(true)}
@@ -126,13 +144,20 @@ function WorkspaceHeader({
         </div>
         <div className="mt-2.5 sm:mt-4">
           <Tabs
-            tabs={[{ id: "chat", label: "Chat", icon: "chat" }, { id: "sources", label: "Sources", icon: "sources", count: kb.sources.length }]}
+            tabs={[{ id: "chat", label: "Chat", icon: "chat" }, { id: "sources", label: "Sources", icon: "sources", count: sourcesCount }]}
             active={tab}
             onChange={(id) => navigate(`/knowledge-bases/${kb.id}/${id}`)}
           />
         </div>
       </div>
-      <AddSourceModal open={add} onClose={() => setAdd(false)} />
+      <AddSourceModal
+        open={add}
+        onClose={() => setAdd(false)}
+        kbId={kb.id}
+        onAdded={() => {
+          onSourcesChanged?.();
+        }}
+      />
       <RenameKBModal
         open={renameModal}
         onClose={() => setRenameModal(false)}
@@ -510,27 +535,63 @@ function SourceRowSkeleton() {
   );
 }
 
-function SourcesView({ kb }: { kb: KnowledgeBase }) {
+function SourcesView({ kb, onSourcesChanged }: { kb: KnowledgeBase; onSourcesChanged?: () => void }) {
   const [filter, setFilter] = useState<"all" | "documents" | "youtube">("all");
   const [q, setQ] = useState("");
   const [add, setAdd] = useState(false);
-  const [sources, setSources] = useState<Source[]>(kb.sources);
+  const [sources, setSources] = useState<Source[]>(kb.sources || []);
   const [loaded, setLoaded] = useState(false);
   const [pending, setPending] = useState<Source | null>(null);
   const toast = useToast();
 
-  useEffect(() => { const t = setTimeout(() => setLoaded(true), 600); return () => clearTimeout(t); }, []);
+  useEffect(() => {
+    setSources(kb.sources || []);
+  }, [kb.sources]);
+
+  useEffect(() => { const t = setTimeout(() => setLoaded(true), 300); return () => clearTimeout(t); }, []);
 
   const removeSource = (s: Source) => {
     const index = sources.findIndex((x) => x.id === s.id);
-    setSources((list) => list.filter((x) => x.id !== s.id));
+    const updated = sources.filter((x) => x.id !== s.id);
+    setSources(updated);
+
+    try {
+      const raw = localStorage.getItem("dm_kbs_cache");
+      if (raw) {
+        const list: KnowledgeBase[] = JSON.parse(raw);
+        const newKbs = list.map((k) => (k.id === kb.id ? { ...k, sources: updated } : k));
+        localStorage.setItem("dm_kbs_cache", JSON.stringify(newKbs));
+      }
+    } catch {}
+
+    onSourcesChanged?.();
+
     toast(`"${s.name}" deleted`, "default", {
       label: "Undo",
-      onClick: () => setSources((list) => { const next = [...list]; next.splice(index, 0, s); return next; }),
+      onClick: () => {
+        const next = [...updated];
+        next.splice(index, 0, s);
+        setSources(next);
+        try {
+          const raw = localStorage.getItem("dm_kbs_cache");
+          if (raw) {
+            const list: KnowledgeBase[] = JSON.parse(raw);
+            const newKbs = list.map((k) => (k.id === kb.id ? { ...k, sources: next } : k));
+            localStorage.setItem("dm_kbs_cache", JSON.stringify(newKbs));
+          }
+        } catch {}
+        onSourcesChanged?.();
+      },
     });
+
+    const token = localStorage.getItem("dm-token") || "";
+    fetch(`${API_BASE}/sources/${s.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    }).catch(() => {});
   };
 
-  const list = sources.filter((s) => {
+  const list = (sources || []).filter((s) => {
     const mf = filter === "all" || (filter === "youtube" ? s.type === "youtube" : s.type !== "youtube");
     return mf && s.name.toLowerCase().includes(q.toLowerCase());
   });
@@ -564,7 +625,14 @@ function SourcesView({ kb }: { kb: KnowledgeBase }) {
           </div>
         )}
       </div>
-      <AddSourceModal open={add} onClose={() => setAdd(false)} />
+      <AddSourceModal
+        open={add}
+        onClose={() => setAdd(false)}
+        kbId={kb.id}
+        onAdded={() => {
+          onSourcesChanged?.();
+        }}
+      />
       <ConfirmDialog
         open={!!pending}
         onClose={() => setPending(null)}
@@ -669,19 +737,19 @@ function SourceDetails({ kb, source }: { kb: KnowledgeBase; source: Source }) {
 
 /* ---------------- Router-facing entry ---------------- */
 export function Workspace({ id, sub, sourceId }: { id: string; sub: "chat" | "sources"; sourceId?: string }) {
-  const { kb, updateKBName } = useKB(id);
+  const { kb, updateKBName, reloadKB } = useKB(id);
   const { navigate } = useRouter();
   if (!kb) {
     return <div className="p-10"><EmptyState icon="library" title="Knowledge base not found" description="It may have been deleted." action={<Button onClick={() => navigate("/knowledge-bases")}>Back to knowledge bases</Button>} /></div>;
   }
   if (sub === "sources" && sourceId) {
-    const source = kb.sources.find((s) => s.id === sourceId);
-    if (source) return <div className="flex h-full flex-col"><WorkspaceHeader kb={kb} tab="sources" sourceName={source.name} onRenamed={updateKBName} /><div className="flex-1 overflow-y-auto"><SourceDetails kb={kb} source={source} /></div></div>;
+    const source = (kb.sources || []).find((s) => s.id === sourceId);
+    if (source) return <div className="flex h-full flex-col"><WorkspaceHeader kb={kb} tab="sources" sourceName={source.name} onRenamed={updateKBName} onSourcesChanged={reloadKB} /><div className="flex-1 overflow-y-auto"><SourceDetails kb={kb} source={source} /></div></div>;
   }
   return (
     <div className="flex h-full flex-col">
-      <WorkspaceHeader kb={kb} tab={sub} onRenamed={updateKBName} />
-      {sub === "chat" ? <ChatView kb={kb} /> : <div className="flex-1 overflow-y-auto"><SourcesView kb={kb} /></div>}
+      <WorkspaceHeader kb={kb} tab={sub} onRenamed={updateKBName} onSourcesChanged={reloadKB} />
+      {sub === "chat" ? <ChatView kb={kb} /> : <div className="flex-1 overflow-y-auto"><SourcesView kb={kb} onSourcesChanged={reloadKB} /></div>}
     </div>
   );
 }

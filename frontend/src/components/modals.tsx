@@ -1,26 +1,46 @@
 import { useState, useEffect } from "react";
 import { Button, Field, Icon, Input, Modal, SourceGlyph, StatusBadge, cx, useToast } from "./ui";
+import { knowledgeBases } from "../lib/data";
 import type { SourceStatus, Source, KnowledgeBase } from "../lib/data";
 import { API_BASE } from "../lib/supabase";
 
 function addSourcesToCache(kbId: string, sources: Source[]) {
   try {
+    let list: KnowledgeBase[] = [];
     const raw = localStorage.getItem("dm_kbs_cache");
     if (raw) {
-      const list: KnowledgeBase[] = JSON.parse(raw);
-      const updated = list.map((k) => {
-        if (k.id === kbId) {
-          const current = k.sources || [];
-          return {
-            ...k,
-            sources: [...sources, ...current.filter((s) => !sources.some((ns) => ns.name === s.name))],
-            updated: "just now",
-          };
-        }
-        return k;
-      });
-      localStorage.setItem("dm_kbs_cache", JSON.stringify(updated));
+      list = JSON.parse(raw);
     }
+    if (!Array.isArray(list) || list.length === 0) {
+      list = [...knowledgeBases];
+    }
+    const found = list.some((k) => k.id === kbId);
+    if (!found) {
+      const matchSeed = knowledgeBases.find((k) => k.id === kbId);
+      if (matchSeed) {
+        list.push({ ...matchSeed });
+      } else {
+        list.push({
+          id: kbId,
+          name: "Knowledge Base",
+          description: "",
+          sources: [],
+          updated: "just now",
+        });
+      }
+    }
+    const updated = list.map((k) => {
+      if (k.id === kbId) {
+        const current = k.sources || [];
+        return {
+          ...k,
+          sources: [...sources, ...current.filter((s) => !sources.some((ns) => ns.name === s.name))],
+          updated: "just now",
+        };
+      }
+      return k;
+    });
+    localStorage.setItem("dm_kbs_cache", JSON.stringify(updated));
   } catch {}
 }
 
