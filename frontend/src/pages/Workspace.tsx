@@ -7,7 +7,6 @@ import { knowledgeBases, sampleConversation } from "../lib/data";
 import type { Citation, ChatMessage, KnowledgeBase, Source } from "../lib/data";
 import { getConversation, createConversation, updateConversation, titleFrom } from "../lib/chat";
 import { API_BASE, getCurrentUser } from "../lib/supabase";
-import { retrieveRelevantChunks, getSourceChunks } from "../lib/rag";
 
 function useKB(id: string) {
   const [kb, setKb] = useState<KnowledgeBase | undefined>(() => {
@@ -333,8 +332,8 @@ function ChatView({ kb }: { kb: KnowledgeBase }) {
     let answerText = "";
     let citations: Citation[] = [];
 
+    const token = localStorage.getItem("dm-token") || "";
     try {
-      const token = localStorage.getItem("dm-token") || "";
       const res = await fetch(`${API_BASE}/chat/query`, {
         method: "POST",
         headers: {
@@ -363,102 +362,13 @@ function ChatView({ kb }: { kb: KnowledgeBase }) {
             : c.section_name || "Citation",
           snippet: c.content,
         }));
+      } else if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        answerText = errData?.detail || `Backend error: HTTP ${res.status}`;
       }
-    } catch {}
-
-    // Fallback: Direct Cloud Groq Llama 3.3-70B API
-    if (!answerText) {
-      try {
-        const user = getCurrentUser();
-        const userName = user?.full_name || "Umair";
-        const p1 = ["g", "s", "k", "_"].join("");
-        const p2 = ["U", "K", "J", "C", "v", "g", "R", "u", "i", "v", "h", "q", "L", "S", "k", "B"].join("");
-        const p3 = ["5", "k", "s", "P", "W", "G", "d", "y", "b", "3", "F", "Y", "z", "3", "z", "K"].join("");
-        const p4 = ["G", "4", "x", "K", "N", "x", "9", "z", "v", "h", "m", "9", "o", "U", "G", "c", "C", "z", "y", "X"].join("");
-        const fallbackKey = `${p1}${p2}${p3}${p4}`;
-        const groqApiKey = (import.meta as any).env?.VITE_GROQ_API_KEY || fallbackKey;
-        
-        const sourcesListStr = (kb.sources || [])
-          .map((s) => `- ${s.name} (${s.type.toUpperCase()})`)
-          .join("\n");
-
-        const sourceIds = (kb.sources || []).map((s) => s.id);
-        const relevantChunks = retrieveRelevantChunks(sourceIds, q, 6);
-
-        let contextBlock = "";
-        if (relevantChunks.length > 0) {
-          contextBlock = `\n\n=== GROUNDED SOURCES & DOCUMENT EXCERPTS ===\n` +
-            relevantChunks.map((c, idx) => `[Excerpt ${idx + 1} - Source: "${c.sourceName}", Page: ${c.pageNumber}]\n"${c.text}"`).join("\n\n") +
-            `\n===========================================\n`;
-        }
-
-        const validMessages = messages
-          .filter((m) => m.content && m.content.trim())
-          .slice(-6)
-          .map((m) => ({ role: m.role, content: m.content.trim() }));
-
-        const systemMessage = {
-          role: "system",
-          content: `You are DocuMind AI, an elite, grounded AI research and knowledge assistant created for scholar ${userName}.
-You are currently operating inside the user's private knowledge base: "${kb.name}".
-Knowledge Base Description: "${kb.description || "General Knowledge Base"}"
-Available Sources in this Knowledge Base (${(kb.sources || []).length}):
-${sourcesListStr || "No sources uploaded yet."}
-${contextBlock}
-CRITICAL GROUNDING INSTRUCTIONS:
-1. When document excerpts are provided above under "GROUNDED SOURCES & DOCUMENT EXCERPTS", you MUST answer the user's question accurately using the facts, text, and details in those excerpts.
-2. Quote relevant lines or passages directly and reference the specific source names and pages.
-3. If the user's question is a general greeting or conversational remark (e.g. 'hi', 'hello', 'how are you', 'i am back'), greet ${userName} warmly by name and offer to help.
-4. Structure your response with clean, professional Markdown (headings, bullet points, bold key concepts).`,
-        };
-
-        const payload = {
-          model: "openai/gpt-oss-120b",
-          messages: [systemMessage, ...validMessages, { role: "user", content: q }],
-          temperature: 0.3,
-          max_tokens: 1024,
-        };
-
-        let groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${groqApiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        });
-
-        if (!groqRes.ok) {
-          groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${groqApiKey}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ ...payload, model: "qwen/qwen3.8-27b" }),
-          });
-        }
-
-        if (groqRes.ok) {
-          const gData = await groqRes.json();
-          answerText = gData.choices?.[0]?.message?.content || "";
-          
-          if (relevantChunks.length > 0 && !citations.length) {
-            citations = relevantChunks.slice(0, 4).map((c) => ({
-              source: c.sourceName,
-              type: (c.sourceType || "doc") as any,
-              locator: `Page ${c.pageNumber}`,
-              snippet: c.text.length > 150 ? c.text.slice(0, 150) + "…" : c.text,
-            }));
-          }
-        }
-      } catch (err) {
-        console.error("Groq API error:", err);
-      }
-    }
-
-    if (!answerText) {
-      answerText = `Hello ${getCurrentUser()?.full_name || "Umair"}! I am ready to answer any questions about "${kb.name}". How can I help you today?`;
+    } catch (err: any) {
+      console.warn("Backend connection notice:", err);
+      answerText = "Backend is not responding. Please make sure your FastAPI backend server is running and accessible at `" + API_BASE + "`.";
     }
 
     const id = `a${Date.now()}`;
@@ -710,13 +620,10 @@ function SourceDetails({ kb, source }: { kb: KnowledgeBase; source: Source }) {
   }, [loc]);
   const [confirm, setConfirm] = useState(false);
   const isYt = source.type === "youtube";
-  const chunks = getSourceChunks(source.id);
-  const chunkCount = chunks.length || source.chunks || 1;
-  const pageCount = source.pages || Math.max(1, Math.ceil(chunkCount / 3));
 
   const facts = isYt
-    ? [["Type", "YouTube video"], ["Duration", source.duration ?? "—"], ["Transcript", source.status === "ready" ? "Indexed" : "Pending"], ["Chunks", String(chunkCount)], ["Added", source.added]]
-    : [["Type", source.type.toUpperCase()], ["Pages", String(pageCount)], ["Chunks", String(chunkCount)], ["Added", source.added]];
+    ? [["Type", "YouTube video"], ["Duration", source.duration ?? "—"], ["Transcript", source.status === "ready" ? "Indexed" : "Pending"], ["Added", source.added]]
+    : [["Type", source.type.toUpperCase()], ["Pages", source.pages ? String(source.pages) : "—"], ["Chunks", source.chunks ? String(source.chunks) : "—"], ["Added", source.added]];
 
   return (
     <div className="w-full max-w-5xl px-6 py-8 sm:px-8">
@@ -741,7 +648,7 @@ function SourceDetails({ kb, source }: { kb: KnowledgeBase; source: Source }) {
 
       <div className="mt-8 grid gap-6 lg:grid-cols-[1.4fr_1fr]">
         <div className="rounded-2xl border border-border bg-panel p-4 sm:p-5">
-          <h2 className="text-sm font-semibold">{isYt ? "Transcript preview" : "Document preview & Indexed Chunks"}</h2>
+          <h2 className="text-sm font-semibold">{isYt ? "Transcript preview" : "Document preview"}</h2>
           {loc && (
             <div ref={highlightRef} className="dm-fade-up mt-3 flex items-start gap-2.5 rounded-xl border border-accent/30 bg-accent-soft px-4 py-3 ring-2 ring-accent/15">
               <Icon name="quote" className="mt-0.5 size-4 shrink-0 text-accent" />
@@ -760,33 +667,11 @@ function SourceDetails({ kb, source }: { kb: KnowledgeBase; source: Source }) {
           ) : isYt ? (
             <div className="mt-3">
               <div className="flex aspect-video items-center justify-center rounded-xl border border-border bg-surface text-muted"><Icon name="youtube" className="size-10 text-failed" /></div>
-              {chunks.length > 0 ? (
-                <div className="mt-3 space-y-2 max-h-96 overflow-y-auto pr-2">
-                  {chunks.map((c) => (
-                    <p key={c.id} className="rounded-lg bg-surface/50 p-2.5 text-xs text-muted leading-relaxed border border-border/50">
-                      <span className="font-mono text-accent text-[11px] font-semibold block mb-1">Transcript Chunk #{c.chunkIndex + 1}</span>
-                      {c.text}
-                    </p>
-                  ))}
-                </div>
-              ) : (
-                <p className="mt-3 text-sm text-muted">Transcript indexed and ready for retrieval.</p>
-              )}
+              <p className={cx("mt-3 rounded-lg p-2 text-sm leading-relaxed text-muted transition-colors", loc && "bg-accent-soft/60 ring-1 ring-accent/20")}>{loc ?? "00:12"} — Video transcript indexed and ready for hybrid retrieval.</p>
             </div>
           ) : (
-            <div className="mt-3 space-y-2.5 max-h-96 overflow-y-auto pr-2">
-              {chunks.length > 0 ? (
-                chunks.map((c) => (
-                  <div key={c.id} className="rounded-lg bg-surface/50 p-3 text-sm text-muted leading-relaxed border border-border/50">
-                    <span className="font-mono text-accent text-xs font-semibold block mb-1">Page {c.pageNumber} · Chunk #{c.chunkIndex + 1}</span>
-                    <p className="text-foreground/90 leading-relaxed">{c.text}</p>
-                  </div>
-                ))
-              ) : (
-                <div className="space-y-2.5 text-sm leading-relaxed text-muted">
-                  <p>Document indexed and ready for grounded retrieval and citations.</p>
-                </div>
-              )}
+            <div className="mt-3 space-y-2.5 text-sm leading-relaxed text-muted">
+              <p>Document parsed and indexed into vector chunks by the Python backend.</p>
             </div>
           )}
         </div>
