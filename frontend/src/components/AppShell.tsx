@@ -5,6 +5,7 @@ import { useTheme } from "../lib/theme";
 import { Icon, ThemeToggle, cx, useToast } from "./ui";
 import { knowledgeBases } from "../lib/data";
 import { useConversationStore, deleteConversation, restoreConversation, timeAgo } from "../lib/chat";
+import { API_BASE } from "../lib/supabase";
 
 const workspace = [
   { label: "Dashboard", to: "/dashboard", icon: "dashboard" as const },
@@ -113,7 +114,7 @@ function UserBlock({ onNavigate }: { onNavigate?: () => void }) {
   useEffect(() => {
     const token = localStorage.getItem("dm-token");
     if (!token) return;
-    fetch("http://127.0.0.1:8000/api/v1/auth/me", {
+    fetch(`${API_BASE}/auth/me`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => {
