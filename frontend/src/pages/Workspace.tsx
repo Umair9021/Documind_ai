@@ -381,18 +381,14 @@ function ChatView({ kb }: { kb: KnowledgeBase }) {
           .map((s) => `- ${s.name} (${s.type.toUpperCase()})`)
           .join("\n");
 
-        const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${groqApiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "llama-3.3-70b-versatile",
-            messages: [
-              {
-                role: "system",
-                content: `You are DocuMind AI, an elite, grounded AI research and knowledge assistant created for scholar ${userName}.
+        const validMessages = messages
+          .filter((m) => m.content && m.content.trim())
+          .slice(-6)
+          .map((m) => ({ role: m.role, content: m.content.trim() }));
+
+        const systemMessage = {
+          role: "system",
+          content: `You are DocuMind AI, an elite, grounded AI research and knowledge assistant created for scholar ${userName}.
 You are currently operating inside the user's private knowledge base: "${kb.name}".
 Knowledge Base Description: "${kb.description || "General Knowledge Base"}"
 Available Sources in this Knowledge Base (${(kb.sources || []).length}):
@@ -402,14 +398,34 @@ Guidelines:
 1. For conversational greetings and casual remarks (e.g. 'hi', 'hello', 'how are you', 'i am back', 'hey'), respond warmly, greet ${userName} by name, and invite them to explore or ask questions about their knowledge base.
 2. When asked questions about documents or general knowledge, provide rich, highly detailed, beautifully structured answers using Markdown (clear headings, bullet points, code blocks, bold key concepts).
 3. If relevant to their uploaded sources, mention the source names and offer insights grounded in their topic.`,
-              },
-              ...messages.slice(-6).map((m) => ({ role: m.role, content: m.content })),
-              { role: "user", content: q },
-            ],
-            temperature: 0.3,
-            max_tokens: 1024,
-          }),
+        };
+
+        const payload = {
+          model: "openai/gpt-oss-120b",
+          messages: [systemMessage, ...validMessages, { role: "user", content: q }],
+          temperature: 0.3,
+          max_tokens: 1024,
+        };
+
+        let groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${groqApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
         });
+
+        if (!groqRes.ok) {
+          groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${groqApiKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ ...payload, model: "qwen/qwen3.8-27b" }),
+          });
+        }
 
         if (groqRes.ok) {
           const gData = await groqRes.json();
