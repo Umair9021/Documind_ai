@@ -38,20 +38,24 @@ class DocumentLoader:
     @staticmethod
     def _load_pdf(file_path: Path) -> List[Dict[str, Any]]:
         segments = []
-        # Attempt pypdf first
+        # Attempt pypdf with layout mode first
         try:
             from pypdf import PdfReader
             reader = PdfReader(str(file_path))
             for page_num, page in enumerate(reader.pages, 1):
-                text = page.extract_text() or ""
+                try:
+                    text = page.extract_text(extraction_mode="layout") or ""
+                except Exception:
+                    text = page.extract_text() or ""
                 if text.strip():
                     segments.append({
                         "text": text,
                         "page_number": page_num,
                         "section_name": f"Page {page_num}"
                     })
-            return segments
-        except ImportError:
+            if segments:
+                return segments
+        except Exception:
             pass
 
         # Fallback to pdfplumber
@@ -59,20 +63,26 @@ class DocumentLoader:
             import pdfplumber
             with pdfplumber.open(str(file_path)) as pdf:
                 for page_num, page in enumerate(pdf.pages, 1):
-                    text = page.extract_text() or ""
+                    text = page.extract_text(layout=True) or page.extract_text() or ""
                     if text.strip():
                         segments.append({
                             "text": text,
                             "page_number": page_num,
                             "section_name": f"Page {page_num}"
                         })
-            return segments
-        except ImportError:
-            # Fallback simple reader if pdf libraries missing
+            if segments:
+                return segments
+        except Exception:
+            pass
+
+        # Fallback simple reader if pdf libraries fail
+        try:
             with open(file_path, "rb") as f:
                 raw = f.read().decode("latin1", errors="ignore")
-                segments.append({"text": raw[:5000], "page_number": 1, "section_name": "Page 1"})
-            return segments
+                segments.append({"text": raw[:10000], "page_number": 1, "section_name": "Page 1"})
+        except Exception:
+            pass
+        return segments
 
     @staticmethod
     def _load_docx(file_path: Path) -> List[Dict[str, Any]]:

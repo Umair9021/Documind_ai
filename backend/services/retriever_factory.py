@@ -301,13 +301,65 @@ class RetrieverFactory:
                     "data": filtered_results
                 })
 
+        # Step 7: Apply Windowed / Adjacent Chunk Stitching to preserve tables & complete sections
+        stitched_results = self._stitch_adjacent_chunks(kb_id, filtered_results)
+
         trace_steps.append({
             "step_name": "Final Ranked Chunks",
-            "description": f"Selected {len(filtered_results)} chunks for LLM grounding context.",
-            "data": filtered_results
+            "description": f"Selected and stitched {len(stitched_results)} chunks for LLM grounding context.",
+            "data": stitched_results
         })
 
-        return filtered_results, {"steps": trace_steps, "strategy": strategy}
+        return stitched_results, {"steps": trace_steps, "strategy": strategy}
+
+    def _stitch_adjacent_chunks(self, kb_id: str, retrieved_chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Stitches consecutive / neighboring chunks from the same document/page to guarantee
+        that tables, lists, and multi-paragraph explanations are never cut off in the middle.
+        """
+        if not retrieved_chunks:
+            return []
+
+        all_chunks = self.vector_store.get_all_kb_chunks(kb_id)
+        if not all_chunks:
+            return retrieved_chunks
+
+        chunk_by_src_idx = {}
+        for c in all_chunks:
+            meta = c.get("metadata", {})
+            src_id = meta.get("source_id") or meta.get("source_name", "src")
+            idx = meta.get("chunk_index", -1)
+            if idx >= 0:
+                chunk_by_src_idx[(src_id, idx)] = c
+
+        expanded_chunks = []
+        seen_ids = set()
+
+        for chunk in retrieved_chunks:
+            cid = chunk["id"]
+            if cid in seen_ids:
+                continue
+            seen_ids.add(cid)
+
+            meta = chunk.get("metadata", {})
+            src_id = meta.get("source_id") or meta.get("source_name", "src")
+            c_idx = meta.get("chunk_index", -1)
+
+            merged_content = chunk["content"]
+            
+            # Check next neighbor (c_idx + 1) to attach tables/continuations on the same page
+            next_chunk = chunk_by_src_idx.get((src_id, c_idx + 1))
+            if next_chunk and next_chunk["id"] not in seen_ids:
+                next_meta = next_chunk.get("metadata", {})
+                if next_meta.get("page_number") == meta.get("page_number") or len(merged_content) < 1500:
+                    merged_content = merged_content + "\n\n" + next_chunk["content"]
+                    seen_ids.add(next_chunk["id"])
+
+            chunk_copy = dict(chunk)
+            chunk_copy["content"] = merged_content
+            expanded_chunks.append(chunk_copy)
+
+        return expanded_chunks
 
     def _mmr_search(self, kb_id: str, query: str, top_k: int, filters: Optional[Dict[str, Any]], target_sources: Optional[List[str]] = None, lambda_mult: float = 0.7) -> List[Dict[str, Any]]:
         candidates = self.vector_store.similarity_search(kb_id, query, top_k=top_k * 3, filters=filters)
