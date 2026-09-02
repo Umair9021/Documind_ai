@@ -50,29 +50,87 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
+type CloudConversation = {
+  id: string;
+  kb_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  kb_name?: string;
+  message_count?: number;
+};
+
 function SidebarHistory({ onNavigate }: { onNavigate?: () => void }) {
-  const { query, navigate } = useRouter();
+  const { query, navigate, path } = useRouter();
   const all = useConversationStore();
+  const [cloudConvs, setCloudConvs] = useState<CloudConversation[]>([]);
   const toast = useToast();
   const activeId = query.get("c");
-  const list = all.filter((c) => c.messages.length > 0).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 25);
 
-  const go = (kbId: string, id: string) => { navigate(`/knowledge-bases/${kbId}/chat?c=${id}`); onNavigate?.(); };
-  const del = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    const conv = all.find((c) => c.id === id);
-    deleteConversation(id);
-    if (conv) toast("Conversation deleted", "default", { label: "Undo", onClick: () => restoreConversation(conv) });
+  const fetchCloudConversations = () => {
+    const token = localStorage.getItem("dm-token") || "";
+    if (!token) return;
+    fetch(`${API_BASE}/chat/conversations`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setCloudConvs(data);
+        }
+      })
+      .catch(() => {});
   };
+
+  useEffect(() => {
+    fetchCloudConversations();
+  }, [path, activeId]);
+
+  const go = (kbId: string, id: string) => {
+    navigate(`/knowledge-bases/${kbId}/chat?c=${id}`);
+    onNavigate?.();
+  };
+
+  const del = async (e: React.MouseEvent, convId: string) => {
+    e.stopPropagation();
+    const token = localStorage.getItem("dm-token") || "";
+    deleteConversation(convId);
+    setCloudConvs((prev) => prev.filter((c) => c.id !== convId));
+    toast("Conversation deleted");
+
+    try {
+      await fetch(`${API_BASE}/chat/conversations/${convId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch {}
+  };
+
+  // Merge cloud conversations with any local unsynced ones
+  const localList = all.filter((c) => c.messages.length > 0);
+  const displayList = cloudConvs.length > 0 
+    ? cloudConvs.map((c) => ({
+        id: c.id,
+        kbId: c.kb_id,
+        title: c.title || "Chat",
+        kbName: c.kb_name || "Knowledge Base",
+        updatedAt: new Date(c.updated_at).getTime(),
+      }))
+    : localList.map((c) => ({
+        id: c.id,
+        kbId: c.kbId,
+        title: c.title,
+        kbName: (knowledgeBases.find((k) => k.id === c.kbId)?.name) || "Knowledge Base",
+        updatedAt: c.updatedAt,
+      }));
 
   return (
     <div className="min-w-0 space-y-0.5">
       <p className="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-faint">Chat history</p>
-      {list.length === 0 ? (
+      {displayList.length === 0 ? (
         <p className="px-3 py-2 text-[13px] leading-relaxed text-faint">Your conversations will appear here once you start a chat.</p>
       ) : (
-        list.map((c) => {
-          const kb = knowledgeBases.find((k) => k.id === c.kbId);
+        displayList.map((c) => {
           const active = activeId === c.id;
           return (
             <button
@@ -86,7 +144,7 @@ function SidebarHistory({ onNavigate }: { onNavigate?: () => void }) {
               <Icon name="chat" className="size-[18px] shrink-0" />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[13px] font-medium">{c.title}</span>
-                <span className="block truncate text-[11px] text-faint">{kb ? `${kb.name} · ` : ""}{timeAgo(c.updatedAt)}</span>
+                <span className="block truncate text-[11px] text-faint">{c.kbName} · {timeAgo(c.updatedAt)}</span>
               </span>
               <span onClick={(e) => del(e, c.id)} role="button" tabIndex={-1} aria-label="Delete conversation" className="shrink-0 rounded-md p-1 text-faint opacity-0 transition-opacity hover:bg-surface hover:text-failed group-hover:opacity-100"><Icon name="trash" className="size-3.5" /></span>
             </button>

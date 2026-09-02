@@ -387,6 +387,28 @@ def db_clear_conversation(conversation_id: str, user_id: str):
     conn.commit()
     conn.close()
 
+def db_list_user_conversations(user_id: str) -> List[Dict[str, Any]]:
+    conn = get_db_connection()
+    rows = conn.execute("""
+        SELECT c.id, c.kb_id, c.title, c.created_at, c.updated_at, k.name as kb_name,
+               (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) as message_count
+        FROM conversations c
+        LEFT JOIN knowledge_bases k ON c.kb_id = k.id
+        WHERE c.user_id = ?
+        ORDER BY c.updated_at DESC
+    """, (user_id,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows if r["message_count"] > 0]
+
+def db_delete_conversation(conversation_id: str, user_id: str) -> bool:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM conversations WHERE id = ? AND user_id = ?", (conversation_id, user_id))
+    affected = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return affected > 0
+
 # User Profile, Settings & Usage Stats
 def db_get_user_profile(user_id: str) -> Dict[str, Any]:
     conn = get_db_connection()
