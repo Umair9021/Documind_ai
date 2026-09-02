@@ -46,25 +46,31 @@ function useKB(id: string) {
           fetch(`${API_BASE}/sources/kb/${id}`, { headers })
             .then((sRes) => (sRes.ok ? sRes.json() : null))
             .then((sources) => {
-              if (Array.isArray(sources) && sources.length > 0) {
-                const formattedSources: Source[] = sources.map((s: any) => ({
-                  id: s.id,
-                  name: s.name,
-                  type: s.source_type || "pdf",
-                  status: s.status || "ready",
-                  added: "recently",
-                  meta: `${(s.source_type || "doc").toUpperCase()}${s.file_size_bytes ? ` · ${(s.file_size_bytes / (1024 * 1024)).toFixed(1)} MB` : ""}`,
-                }));
-                setKb({
-                  id: data.id,
-                  name: data.name,
-                  description: data.description || "",
-                  sources: formattedSources,
-                  updated: "Recently active",
-                });
-              }
+              const formattedSources: Source[] = (Array.isArray(sources) ? sources : []).map((s: any) => ({
+                id: s.id,
+                name: s.name,
+                type: s.source_type || "pdf",
+                status: s.status || "ready",
+                added: "recently",
+                meta: `${(s.source_type || "doc").toUpperCase()}${s.file_size_bytes ? ` · ${(s.file_size_bytes / (1024 * 1024)).toFixed(1)} MB` : ""}`,
+              }));
+              setKb({
+                id: data.id,
+                name: data.name,
+                description: data.description || "",
+                sources: formattedSources,
+                updated: "Recently active",
+              });
             })
-            .catch(() => {});
+            .catch(() => {
+              setKb({
+                id: data.id,
+                name: data.name,
+                description: data.description || "",
+                sources: [],
+                updated: "Recently active",
+              });
+            });
         }
       })
       .catch(() => {});
@@ -298,8 +304,45 @@ function ChatView({ kb }: { kb: KnowledgeBase }) {
     setThinking(false);
     setStreaming(false);
     convId.current = activeId;
-    setMessages(activeId ? (getConversation(activeId)?.messages ?? []) : []);
+    
+    // Check local store first, then fetch from backend
+    const localMsgs = activeId ? (getConversation(activeId)?.messages ?? []) : [];
+    if (localMsgs.length > 0) {
+      setMessages(localMsgs);
+    }
   }, [activeId]);
+
+  // Always fetch central cloud conversation history from database
+  useEffect(() => {
+    const token = localStorage.getItem("dm-token") || "";
+    if (!token || !kb.id) return;
+    fetch(`${API_BASE}/chat/conversations/${kb.id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && Array.isArray(data.messages) && data.messages.length > 0) {
+          const loadedMsgs: ChatMessage[] = data.messages.map((m: any) => ({
+            id: m.id || `m_${Date.now()}_${Math.random()}`,
+            role: m.role as "user" | "assistant",
+            content: m.content || "",
+            citations: (m.citations || []).map((c: any) => ({
+              source: c.source_name,
+              type: c.source_type || "doc",
+              locator: c.page_number
+                ? `Page ${c.page_number}`
+                : c.timestamp
+                ? c.timestamp
+                : c.section_name || "Citation",
+              snippet: c.content,
+            })),
+            state: "ok",
+          }));
+          setMessages(loadedMsgs);
+        }
+      })
+      .catch(() => {});
+  }, [kb.id]);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, thinking]);
   useEffect(() => () => timers.current.forEach(clearTimeout), []);
