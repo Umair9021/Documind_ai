@@ -88,6 +88,8 @@ class SourceCreate(BaseModel):
 class YouTubeSourceCreate(BaseModel):
     kb_id: str
     url: str
+    client_transcript_text: Optional[str] = None
+    client_transcript_segments: Optional[List[Dict[str, Any]]] = None
 
 class SourceResponse(BaseModel):
     id: str

@@ -162,13 +162,28 @@ def add_youtube_source(yt_in: YouTubeSourceCreate, current_user_id: str = Depend
         except Exception:
             pass
 
-    try:
-        segments, video_title, video_id = YouTubeLoader.load_transcript(yt_in.url)
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"YouTube Ingestion Error: {str(e)}"
-        )
+    video_id = YouTubeLoader.extract_video_id(yt_in.url) or "video"
+    video_title = f"YouTube Video ({video_id})"
+    segments = []
+
+    # 1. Check if client provided verbatim transcript segments
+    if yt_in.client_transcript_segments and len(yt_in.client_transcript_segments) > 0:
+        try:
+            meta_title, _, _, _ = YouTubeLoader.fetch_video_metadata(yt_in.url, video_id)
+            if meta_title:
+                video_title = meta_title
+        except Exception:
+            pass
+        segments = yt_in.client_transcript_segments
+    else:
+        # 2. Server-side extraction & Groq synthesis fallback
+        try:
+            segments, video_title, video_id = YouTubeLoader.load_transcript(yt_in.url)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"YouTube Ingestion Error: {str(e)}"
+            )
 
     source_record = db_create_source(
         kb_id=yt_in.kb_id,

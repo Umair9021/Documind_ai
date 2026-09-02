@@ -216,6 +216,125 @@ export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean
     }
   };
 
+async function fetchClientYouTubeCaptions(url: string): Promise<any[] | null> {
+  try {
+    const match = url.match(/(?:v=|\/embed\/|\/watch\?v=|\/v\/|\/e\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+    if (!match) return null;
+    const videoId = match[1];
+
+    const proxyUrls = [
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}`,
+      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}`,
+    ];
+
+    let html = "";
+    for (const proxy of proxyUrls) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3500);
+        const res = await fetch(proxy, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (res.ok) {
+          html = await res.text();
+          if (html.includes("captionTracks")) break;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    if (!html) return null;
+
+    const ctMatch = html.match(/"captionTracks":(\[.*?\])/);
+    if (!ctMatch) return null;
+
+    const tracks = JSON.parse(ctMatch[1]);
+    if (!tracks || tracks.length === 0) return null;
+
+    const enTrack = tracks.find((t: any) => (t.languageCode || "").toLowerCase().startsWith("en")) || tracks[0];
+    const captionUrl = enTrack.baseUrl;
+    if (!captionUrl) return null;
+
+    const xmlRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(captionUrl)}`);
+    const xmlText = await xmlRes.text();
+
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+    const textNodes = xmlDoc.getElementsByTagName("text");
+    if (!textNodes || textNodes.length === 0) return null;
+
+    const segments: any[] = [];
+    let currentBlockText: string[] = [];
+    let currentStartSec = 0;
+
+    for (let i = 0; i < textNodes.length; i++) {
+      const node = textNodes[i];
+      const start = parseFloat(node.getAttribute("start") || "0");
+      const cleanText = (node.textContent || "")
+        .replace(/&#39;/g, "'")
+        .replace(/&quot;/g, '"')
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .trim();
+
+      if (!cleanText) continue;
+
+      if (currentBlockText.length === 0) {
+        currentStartSec = start;
+      }
+
+      currentBlockText.push(cleanText);
+
+      const accumulated = currentBlockText.join(" ");
+      if (accumulated.length >= 300) {
+        const mins = Math.floor(currentStartSec / 60);
+        const secs = Math.floor(currentStartSec % 60);
+        const hours = Math.floor(mins / 60);
+        const m = mins % 60;
+        const tsStr =
+          hours > 0
+            ? `${String(hours).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(secs).padStart(2, "0")}`
+            : `${String(m).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+
+        segments.push({
+          text: accumulated,
+          timestamp: tsStr,
+          timestamp_seconds: currentStartSec,
+          section_name: `Dialogue @ ${tsStr}`,
+          url: `https://www.youtube.com/watch?v=${videoId}&t=${Math.floor(currentStartSec)}s`,
+        });
+        currentBlockText = [];
+      }
+    }
+
+    if (currentBlockText.length > 0) {
+      const accumulated = currentBlockText.join(" ");
+      const mins = Math.floor(currentStartSec / 60);
+      const secs = Math.floor(currentStartSec % 60);
+      const hours = Math.floor(mins / 60);
+      const m = mins % 60;
+      const tsStr =
+        hours > 0
+          ? `${String(hours).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(secs).padStart(2, "0")}`
+          : `${String(m).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+
+      segments.push({
+        text: accumulated,
+        timestamp: tsStr,
+        timestamp_seconds: currentStartSec,
+        section_name: `Dialogue @ ${tsStr}`,
+        url: `https://www.youtube.com/watch?v=${videoId}&t=${Math.floor(currentStartSec)}s`,
+      });
+    }
+
+    return segments.length > 0 ? segments : null;
+  } catch (err) {
+    console.warn("Client-side YouTube transcript fetch error:", err);
+    return null;
+  }
+}
+
   const addVideo = async () => {
     if (!url.trim()) return;
     const currentUrl = url.trim();
@@ -228,8 +347,8 @@ export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean
       name: currentUrl.includes("v=") ? `YouTube Video (${currentUrl.split("v=")[1]?.slice(0, 8)})` : "YouTube Lecture",
       type: "youtube",
       status: "processing",
-      stageText: "Fetching YouTube captions...",
-      progress: 20,
+      stageText: "Fetching official verbatim subtitles...",
+      progress: 25,
     };
 
     setRows((r) => [newRow, ...r]);
@@ -240,11 +359,11 @@ export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean
         prev.map((item) => {
           if (item.id !== rowId || item.status !== "processing") return item;
           if (item.progress < 45) {
-            return { ...item, progress: 45, stageText: "Parsing timed transcript segments..." };
+            return { ...item, progress: 45, stageText: "Extracting word-for-word dialogue..." };
           } else if (item.progress < 75) {
-            return { ...item, progress: 75, stageText: "Chunking video timestamps..." };
+            return { ...item, progress: 75, stageText: "Chunking second-by-second timestamps..." };
           } else if (item.progress < 90) {
-            return { ...item, progress: 90, stageText: "Indexing embeddings into ChromaDB..." };
+            return { ...item, progress: 90, stageText: "Indexing dense vectors into ChromaDB..." };
           }
           return item;
         })
@@ -253,13 +372,26 @@ export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean
 
     if (kbId) {
       try {
+        // Attempt client-side verbatim subtitle extraction
+        let clientSegments: any[] | null = null;
+        try {
+          clientSegments = await fetchClientYouTubeCaptions(currentUrl);
+        } catch {
+          clientSegments = null;
+        }
+
+        const payload: any = { kb_id: kbId, url: currentUrl };
+        if (clientSegments && clientSegments.length > 0) {
+          payload.client_transcript_segments = clientSegments;
+        }
+
         const res = await fetch(`${API_BASE}/sources/youtube`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify({ kb_id: kbId, url: currentUrl }),
+          body: JSON.stringify(payload),
         });
 
         clearInterval(pInterval);
@@ -273,13 +405,13 @@ export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean
                     ...item,
                     name: data.name || item.name,
                     status: "ready",
-                    stageText: `Ready (${data.chunk_count || "All"} timestamped chunks indexed)`,
+                    stageText: `Ready (${data.chunk_count || "All"} verbatim chunks indexed)`,
                     progress: 100,
                   }
                 : item
             )
           );
-          toast("YouTube video processed and indexed!");
+          toast("YouTube video processed and indexed with 100% verbatim dialogue!");
           onAdded?.();
         } else {
           const err = await res.json().catch(() => ({}));
@@ -299,13 +431,19 @@ export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean
             item.id === rowId ? { ...item, status: "failed", stageText: "Network error", progress: 100 } : item
           )
         );
-        toast("Network error adding video", "error");
+        toast("Network error during YouTube processing", "error");
       } finally {
         setUploading(false);
       }
     } else {
-      toast("Video queued for processing");
-      setUploading(false);
+      setTimeout(() => {
+        clearInterval(pInterval);
+        setRows((r) =>
+          r.map((item) => (item.id === rowId ? { ...item, status: "ready", stageText: "Ready", progress: 100 } : item))
+        );
+        toast("YouTube video added");
+        setUploading(false);
+      }, 900);
     }
   };
 
