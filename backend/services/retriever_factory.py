@@ -101,32 +101,20 @@ class RetrieverFactory:
 
         for src in distinct_sources:
             src_clean = src.lower()
-            name_no_ext = re.sub(r'\.(pdf|docx|txt|csv|xlsx|json)$', '', src_clean)
+            name_no_ext = re.sub(r'\.(pdf|docx|txt|csv|xlsx|json|md)$', '', src_clean).strip()
 
-            if src_clean in q_clean or name_no_ext in q_clean:
+            # 1. Exact full file name match or full base title match
+            if (len(src_clean) >= 4 and src_clean in q_clean) or (len(name_no_ext) >= 5 and name_no_ext in q_clean):
                 if src not in matched_sources:
                     matched_sources.append(src)
                 continue
 
-            significant_parts = [
-                p for p in re.split(r'[\s_\-\|\.\(\)]+', name_no_ext)
-                if len(p) >= 3 and p not in ["document", "reading", "after", "full", "movie", "video", "youtube", "stories", "hours", "world", "with", "from", "short", "story"]
-            ]
-            
-            q_words = re.findall(r'\b\w+\b', q_clean)
-            
-            # Check if any significant word or prefix matches (e.g. "escaped" -> "escape")
-            match_found = False
-            for p in significant_parts:
-                for qw in q_words:
-                    if len(qw) >= 4 and len(p) >= 4 and (qw.startswith(p[:4]) or p.startswith(qw[:4]) or p == qw):
-                        match_found = True
-                        break
-                if match_found:
-                    break
-            
-            if match_found and src not in matched_sources:
-                matched_sources.append(src)
+            # 2. Explicit citation query (e.g. "in physics_notes", "from file X")
+            if len(name_no_ext) >= 4:
+                pattern = r'\b(?:in|from|according to|about|of)\s+["\']?' + re.escape(name_no_ext) + r'["\']?\b'
+                if re.search(pattern, q_clean):
+                    if src not in matched_sources:
+                        matched_sources.append(src)
 
         return matched_sources
 

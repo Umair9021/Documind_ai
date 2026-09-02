@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import urllib.request
 from pathlib import Path
@@ -42,15 +43,20 @@ class HuggingFaceInferenceEmbeddingFunction(EmbeddingFunction[Documents]):
             except Exception:
                 pass
 
-        # High-speed deterministic normalized embedding (sub-millisecond latency, zero network hang)
+        # High-speed deterministic normalized embedding (sub-millisecond latency, zero network hang, stable across all processes)
+        import hashlib
+        import math
         embeddings = []
         for text in input:
             vec = [0.0] * 384
-            words = text.lower().split()
+            words = re.findall(r'\b\w+\b', text.lower()) if text else []
+            if not words:
+                embeddings.append(vec)
+                continue
             for w in words:
-                h = abs(hash(w)) % 384
+                h = int(hashlib.md5(w.encode('utf-8')).hexdigest(), 16) % 384
                 vec[h] += 1.0
-            norm = (sum(x * x for x in vec) ** 0.5) or 1.0
+            norm = math.sqrt(sum(x * x for x in vec)) or 1.0
             embeddings.append([x / norm for x in vec])
         return embeddings
 
