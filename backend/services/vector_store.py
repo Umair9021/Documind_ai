@@ -9,59 +9,85 @@ from chromadb.config import Settings
 from chromadb.api.types import EmbeddingFunction, Documents, Embeddings
 
 try:
-    from backend.config import CHROMA_DIR, DEFAULT_EMBEDDING_MODEL, HF_TOKEN
+    from backend.config import CHROMA_DIR, DEFAULT_EMBEDDING_MODEL, HF_TOKEN, OPENROUTER_API_KEY, OPENROUTER_EMBEDDING_MODEL
 except ModuleNotFoundError:
     from config import CHROMA_DIR, DEFAULT_EMBEDDING_MODEL
-    HF_TOKEN = os.getenv("HF_TOKEN", os.getenv("HUGGINGFACE_API_KEY", ""))
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+    OPENROUTER_EMBEDDING_MODEL = os.getenv("OPENROUTER_EMBEDDING_MODEL", "nvidia/nemotron-3-embed-1b:free")
 
-class HuggingFaceInferenceEmbeddingFunction(EmbeddingFunction[Documents]):
-    """Zero Local CPU: Computes embeddings via Hugging Face Serverless Inference API"""
-    def __init__(self, api_key: Optional[str] = None, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
-        self.api_key = api_key or HF_TOKEN
-        self.api_url = f"https://api-inference.huggingface.co/models/{model_name}"
-        self.model_name = model_name
+class OpenRouterNemotronEmbeddingFunction(EmbeddingFunction[Documents]):
+    """Enterprise Cloud GPU: Computes 2048-dimensional dense embeddings via NVIDIA Nemotron 3 Embed 1B on OpenRouter"""
+    def __init__(self, api_key: Optional[str] = None, model_name: Optional[str] = None):
+        self.api_key = api_key or OPENROUTER_API_KEY
+        self.model_name = model_name or OPENROUTER_EMBEDDING_MODEL
+        self.api_url = "https://openrouter.ai/api/v1/embeddings"
 
     def name(self) -> str:
-        return "sentence_transformer"
+        return "openrouter_nemotron_embed"
 
-    def __call__(self, input: Documents) -> Embeddings:
-        if not input:
-            return []
-        
-        if self.api_key:
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}"
-            }
-            payload = json.dumps({"inputs": list(input), "options": {"wait_for_model": True}}).encode("utf-8")
-            req = urllib.request.Request(self.api_url, data=payload, headers=headers, method="POST")
-            try:
-                with urllib.request.urlopen(req, timeout=3) as resp:
-                    result = json.loads(resp.read().decode("utf-8"))
-                    if isinstance(result, list) and len(result) == len(input):
-                        return result
-            except Exception:
-                pass
-
-        # High-speed deterministic normalized embedding (sub-millisecond latency, zero network hang, stable across all processes)
+    def _fallback_embed(self, input_texts: List[str]) -> List[List[float]]:
         import hashlib
         import math
         embeddings = []
-        for text in input:
-            vec = [0.0] * 384
+        for text in input_texts:
+            vec = [0.0] * 2048
             words = re.findall(r'\b\w+\b', text.lower()) if text else []
             if not words:
                 embeddings.append(vec)
                 continue
             for w in words:
-                h = int(hashlib.md5(w.encode('utf-8')).hexdigest(), 16) % 384
+                h = int(hashlib.md5(w.encode('utf-8')).hexdigest(), 16) % 2048
                 vec[h] += 1.0
             norm = math.sqrt(sum(x * x for x in vec)) or 1.0
             embeddings.append([x / norm for x in vec])
         return embeddings
 
+    def __call__(self, input: Documents) -> Embeddings:
+        if not input:
+            return []
+        
+        texts = list(input)
+        if not self.api_key:
+            return self._fallback_embed(texts)
+
+        # Batch in chunks of 20 to avoid payload size limits
+        batch_size = 20
+        all_embeddings = []
+
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            payload = {
+                "model": self.model_name,
+                "input": batch
+            }
+            req = urllib.request.Request(
+                self.api_url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://documind-ai.com",
+                    "X-Title": "DocuMind AI"
+                },
+                method="POST"
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    items = data.get("data", [])
+                    if len(items) == len(batch):
+                        all_embeddings.extend([item["embedding"] for item in items])
+                        continue
+            except Exception as e:
+                print(f"[OpenRouter Nemotron Embeddings Error] {e}")
+            
+            # If API call fails or times out, fallback gracefully for this batch
+            all_embeddings.extend(self._fallback_embed(batch))
+
+        return all_embeddings
+
 class VectorStoreManager:
-    """Manages Chroma DB vector collections isolated per Knowledge Base with Cloud Inference"""
+    """Manages Chroma DB vector collections isolated per Knowledge Base with NVIDIA Nemotron 1B Cloud GPU Inference"""
 
     _instance = None
 
@@ -76,7 +102,7 @@ class VectorStoreManager:
             path=str(CHROMA_DIR),
             settings=Settings(anonymized_telemetry=False, is_persistent=True)
         )
-        self.embedding_fn = HuggingFaceInferenceEmbeddingFunction()
+        self.embedding_fn = OpenRouterNemotronEmbeddingFunction()
 
     def get_collection(self, kb_id: str):
         collection_name = f"kb_{kb_id.replace('-', '_')}"
