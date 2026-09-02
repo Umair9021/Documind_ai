@@ -115,23 +115,23 @@ class YouTubeLoader:
         video_title, author, description, chapters = YouTubeLoader.fetch_video_metadata(url, video_id)
         raw_transcript = None
 
+        # 1. Try YouTubeTranscriptApi().fetch
         try:
+            ytt_api = YouTubeTranscriptApi()
             try:
-                raw_transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['en', 'en-US', 'en-GB'])
+                raw_transcript = ytt_api.fetch(video_id, languages=['en', 'en-US', 'en-GB'])
             except Exception:
-                pass
-
-            if not raw_transcript:
-                ytt_api = YouTubeTranscriptApi()
-                transcripts = ytt_api.list(video_id)
-                for t in transcripts:
-                    if 'en' in t.language_code.lower():
-                        raw_transcript = t.fetch()
-                        break
-                if not raw_transcript:
+                try:
+                    raw_transcript = ytt_api.fetch(video_id)
+                except Exception:
+                    transcripts = ytt_api.list(video_id)
                     for t in transcripts:
-                        raw_transcript = t.fetch()
-                        break
+                        try:
+                            raw_transcript = t.fetch()
+                            if raw_transcript:
+                                break
+                        except Exception:
+                            continue
         except Exception:
             raw_transcript = None
 
