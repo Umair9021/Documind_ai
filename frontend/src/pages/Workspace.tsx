@@ -697,11 +697,6 @@ function SourceDetails({ kb, source }: { kb: KnowledgeBase; source: Source }) {
               Processing failed. The file may be corrupted or unsupported.
               <div className="mt-3"><Button size="sm" variant="secondary" icon="retry">Retry processing</Button></div>
             </div>
-          ) : isYt ? (
-            <div className="mt-3">
-              <div className="flex aspect-video items-center justify-center rounded-xl border border-border bg-surface text-muted"><Icon name="youtube" className="size-10 text-failed" /></div>
-              <p className={cx("mt-3 rounded-lg p-2 text-sm leading-relaxed text-muted transition-colors", loc && "bg-accent-soft/60 ring-1 ring-accent/20")}>{loc ?? "00:00"} — Video transcript indexed and ready for hybrid retrieval.</p>
-            </div>
           ) : (
             <div className="mt-3 space-y-2.5 text-sm leading-relaxed text-foreground/90 max-h-96 overflow-y-auto pr-2 [scrollbar-width:thin]">
               {previewData?.preview_text ? (
@@ -709,7 +704,7 @@ function SourceDetails({ kb, source }: { kb: KnowledgeBase; source: Source }) {
                   {previewData.preview_text}
                 </div>
               ) : (
-                <p className="text-muted text-sm">Loading document preview from vector index...</p>
+                <p className="text-muted text-sm">{isYt ? "Loading video transcript from vector index..." : "Loading document preview from vector index..."}</p>
               )}
             </div>
           )}
