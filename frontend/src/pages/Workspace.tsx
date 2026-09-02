@@ -9,35 +9,11 @@ import { getConversation, createConversation, updateConversation, titleFrom } fr
 import { API_BASE, getCurrentUser } from "../lib/supabase";
 
 function useKB(id: string) {
-  const [kb, setKb] = useState<KnowledgeBase | undefined>(() => {
-    try {
-      const raw = localStorage.getItem("dm_kbs_cache");
-      if (raw) {
-        const list: KnowledgeBase[] = JSON.parse(raw);
-        const found = list.find((k) => k.id === id);
-        if (found) return found;
-      }
-    } catch {}
-    return knowledgeBases.find((k) => k.id === id);
-  });
+  const [kb, setKb] = useState<KnowledgeBase | undefined>(undefined);
 
   const reloadKB = () => {
-    try {
-      const raw = localStorage.getItem("dm_kbs_cache");
-      if (raw) {
-        const list: KnowledgeBase[] = JSON.parse(raw);
-        const found = list.find((k) => k.id === id);
-        if (found) {
-          setKb({ ...found, sources: [...(found.sources || [])] });
-          return;
-        }
-      }
-    } catch {}
-  };
-
-  useEffect(() => {
-    reloadKB();
     const token = localStorage.getItem("dm-token") || "";
+    if (!token || !id) return;
     const headers = { Authorization: `Bearer ${token}` };
     fetch(`${API_BASE}/knowledge-bases/${id}`, { headers })
       .then((res) => (res.ok ? res.json() : null))
@@ -74,6 +50,10 @@ function useKB(id: string) {
         }
       })
       .catch(() => {});
+  };
+
+  useEffect(() => {
+    reloadKB();
   }, [id]);
 
   const updateKBName = (name: string, desc: string) => {
@@ -561,38 +541,10 @@ function SourcesView({ kb, onSourcesChanged }: { kb: KnowledgeBase; onSourcesCha
   useEffect(() => { const t = setTimeout(() => setLoaded(true), 300); return () => clearTimeout(t); }, []);
 
   const removeSource = (s: Source) => {
-    const index = sources.findIndex((x) => x.id === s.id);
     const updated = sources.filter((x) => x.id !== s.id);
     setSources(updated);
-
-    try {
-      const raw = localStorage.getItem("dm_kbs_cache");
-      if (raw) {
-        const list: KnowledgeBase[] = JSON.parse(raw);
-        const newKbs = list.map((k) => (k.id === kb.id ? { ...k, sources: updated } : k));
-        localStorage.setItem("dm_kbs_cache", JSON.stringify(newKbs));
-      }
-    } catch {}
-
     onSourcesChanged?.();
-
-    toast(`"${s.name}" deleted`, "default", {
-      label: "Undo",
-      onClick: () => {
-        const next = [...updated];
-        next.splice(index, 0, s);
-        setSources(next);
-        try {
-          const raw = localStorage.getItem("dm_kbs_cache");
-          if (raw) {
-            const list: KnowledgeBase[] = JSON.parse(raw);
-            const newKbs = list.map((k) => (k.id === kb.id ? { ...k, sources: next } : k));
-            localStorage.setItem("dm_kbs_cache", JSON.stringify(newKbs));
-          }
-        } catch {}
-        onSourcesChanged?.();
-      },
-    });
+    toast(`"${s.name}" deleted`);
 
     const token = localStorage.getItem("dm-token") || "";
     fetch(`${API_BASE}/sources/${s.id}`, {

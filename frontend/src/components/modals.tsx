@@ -4,46 +4,6 @@ import { knowledgeBases } from "../lib/data";
 import type { SourceStatus, Source, KnowledgeBase } from "../lib/data";
 import { API_BASE } from "../lib/supabase";
 
-function addSourcesToCache(kbId: string, sources: Source[]) {
-  try {
-    let list: KnowledgeBase[] = [];
-    const raw = localStorage.getItem("dm_kbs_cache");
-    if (raw) {
-      list = JSON.parse(raw);
-    }
-    if (!Array.isArray(list) || list.length === 0) {
-      list = [...knowledgeBases];
-    }
-    const found = list.some((k) => k.id === kbId);
-    if (!found) {
-      const matchSeed = knowledgeBases.find((k) => k.id === kbId);
-      if (matchSeed) {
-        list.push({ ...matchSeed });
-      } else {
-        list.push({
-          id: kbId,
-          name: "Knowledge Base",
-          description: "",
-          sources: [],
-          updated: "just now",
-        });
-      }
-    }
-    const updated = list.map((k) => {
-      if (k.id === kbId) {
-        const current = k.sources || [];
-        return {
-          ...k,
-          sources: [...sources, ...current.filter((s) => !sources.some((ns) => ns.name === s.name))],
-          updated: "just now",
-        };
-      }
-      return k;
-    });
-    localStorage.setItem("dm_kbs_cache", JSON.stringify(updated));
-  } catch {}
-}
-
 export function CreateKBModal({ open, onClose, onCreate }: { open: boolean; onClose: () => void; onCreate: (name: string, desc?: string) => void }) {
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
@@ -233,9 +193,6 @@ export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean
     };
 
     if (kbId) {
-      addSourcesToCache(kbId, [newYtSource]);
-      onAdded?.();
-
       try {
         const res = await fetch(`${API_BASE}/sources/youtube`, {
           method: "POST",
@@ -248,9 +205,12 @@ export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean
         if (res.ok) {
           toast("YouTube video processed by backend");
           onAdded?.();
+        } else {
+          const err = await res.json().catch(() => ({}));
+          toast(err.detail || "Failed to process YouTube video", "error");
         }
       } catch (err: any) {
-        console.warn("Backend video notice:", err);
+        toast("Network error adding video", "error");
       } finally {
         setRows((r) => r.map((item) => item.name === currentUrl ? { ...item, status: "ready" as SourceStatus } : item));
         setUploading(false);

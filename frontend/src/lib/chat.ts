@@ -10,23 +10,10 @@ export interface Conversation {
   updatedAt: number;
 }
 
-const KEY = "dm-conversations";
-
-function load(): Conversation[] {
-  try {
-    const raw = JSON.parse(localStorage.getItem(KEY) || "[]") as Conversation[];
-    // never restore a mid-stream flag
-    return raw.map((c) => ({ ...c, messages: c.messages.map((m) => ({ ...m, streaming: false })) }));
-  } catch {
-    return [];
-  }
-}
-
-let store: Conversation[] = load();
+let store: Conversation[] = [];
 const listeners = new Set<() => void>();
 
 function persist() {
-  try { localStorage.setItem(KEY, JSON.stringify(store)); } catch { /* quota / disabled — keep in-memory */ }
   listeners.forEach((l) => l());
 }
 

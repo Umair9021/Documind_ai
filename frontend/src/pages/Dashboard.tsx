@@ -60,25 +60,10 @@ function KBCardSkeleton() {
   );
 }
 
-const STORAGE_KEY = "dm_kbs_cache";
-
-function getCachedKBs(): KnowledgeBase[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {}
-  return [];
-}
-
-function saveCachedKBs(kbs: KnowledgeBase[]) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(kbs));
-  } catch {}
-}
-
-/* shared optimistic-delete & rename hook with live backend and persistent storage */
+/* Pure Cloud-First Knowledge Base Hook */
 function useKBList() {
-  const [kbs, setKbs] = useState<KnowledgeBase[]>(getCachedKBs);
+  const [kbs, setKbs] = useState<KnowledgeBase[]>([]);
+  const [loading, setLoading] = useState(true);
   const toast = useToast();
 
   const getHeaders = () => {
@@ -91,6 +76,10 @@ function useKBList() {
 
   const fetchKBs = async () => {
     const token = localStorage.getItem("dm-token") || "";
+    if (!token) {
+      setLoading(false);
+      return;
+    }
     try {
       const res = await fetch(`${API_BASE}/knowledge-bases/`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -98,41 +87,26 @@ function useKBList() {
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
-          const formatted = await Promise.all(
-            data.map(async (d: any) => {
-              let sourcesList: Source[] = [];
-              try {
-                const sRes = await fetch(`${API_BASE}/sources/kb/${d.id}`, {
-                  headers: { Authorization: `Bearer ${token}` },
-                });
-                if (sRes.ok) {
-                  const sData = await sRes.json();
-                  if (Array.isArray(sData)) {
-                    sourcesList = sData.map((s: any) => ({
-                      id: s.id,
-                      name: s.name,
-                      type: s.source_type || "pdf",
-                      status: s.status || "ready",
-                      added: "recently",
-                      meta: `${(s.source_type || "doc").toUpperCase()}${s.file_size_bytes ? ` · ${(s.file_size_bytes / (1024 * 1024)).toFixed(1)} MB` : ""}`,
-                    }));
-                  }
-                }
-              } catch {}
-              return {
-                id: d.id,
-                name: d.name,
-                description: d.description || "",
-                sources: sourcesList,
-                updated: "Recently active",
-              };
-            })
-          );
+          const formatted: KnowledgeBase[] = data.map((d: any) => ({
+            id: d.id,
+            name: d.name,
+            description: d.description || "",
+            sources: Array.from({ length: d.source_count || 0 }).map((_, idx) => ({
+              id: `src_${idx}`,
+              name: "Source",
+              type: "pdf",
+              status: "ready",
+              added: "recently",
+            })),
+            updated: "Recently active",
+          }));
           setKbs(formatted);
-          saveCachedKBs(formatted);
         }
       }
-    } catch (e) {}
+    } catch (e) {
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -141,20 +115,8 @@ function useKBList() {
 
   const remove = async (kb: KnowledgeBase) => {
     const token = localStorage.getItem("dm-token") || "";
-    const index = kbs.findIndex((k) => k.id === kb.id);
-    const updated = kbs.filter((k) => k.id !== kb.id);
-    setKbs(updated);
-    saveCachedKBs(updated);
-
-    toast(`"${kb.name}" deleted`, "default", {
-      label: "Undo",
-      onClick: () => {
-        const next = [...updated];
-        next.splice(index, 0, kb);
-        setKbs(next);
-        saveCachedKBs(next);
-      },
-    });
+    setKbs((prev) => prev.filter((k) => k.id !== kb.id));
+    toast(`"${kb.name}" deleted`);
 
     try {
       await fetch(`${API_BASE}/knowledge-bases/${kb.id}`, {
@@ -165,20 +127,7 @@ function useKBList() {
   };
 
   const addKB = async (name: string, desc = "") => {
-    const tempId = `kb_${Math.random().toString(36).slice(2, 10)}`;
-    const newKb: KnowledgeBase = {
-      id: tempId,
-      name,
-      description: desc,
-      sources: [],
-      updated: "just now",
-    };
-
-    const nextList = [newKb, ...kbs];
-    setKbs(nextList);
-    saveCachedKBs(nextList);
-    toast(`Knowledge base "${name}" created!`);
-
+    const token = localStorage.getItem("dm-token") || "";
     try {
       const res = await fetch(`${API_BASE}/knowledge-bases/`, {
         method: "POST",
@@ -187,23 +136,24 @@ function useKBList() {
       });
       if (res.ok) {
         const created = await res.json();
-        if (created.id) {
-          const finalKb = { ...newKb, id: created.id };
-          const replaced = [finalKb, ...kbs.filter((k) => k.id !== tempId)];
-          setKbs(replaced);
-          saveCachedKBs(replaced);
+        if (created && created.id) {
+          const newKb: KnowledgeBase = {
+            id: created.id,
+            name: created.name,
+            description: created.description || "",
+            sources: [],
+            updated: "just now",
+          };
+          setKbs((prev) => [newKb, ...prev]);
           return created.id;
         }
       }
     } catch (e) {}
-
-    return tempId;
+    return null;
   };
 
   const renameKB = async (id: string, name: string, desc: string) => {
-    const updated = kbs.map((k) => (k.id === id ? { ...k, name, description: desc } : k));
-    setKbs(updated);
-    saveCachedKBs(updated);
+    setKbs((prev) => prev.map((k) => (k.id === id ? { ...k, name, description: desc } : k)));
     toast(`Knowledge base updated to "${name}"`);
 
     try {
@@ -215,7 +165,7 @@ function useKBList() {
     } catch (e) {}
   };
 
-  return { kbs, remove, addKB, renameKB, reload: fetchKBs };
+  return { kbs, loading, remove, addKB, renameKB, reload: fetchKBs };
 }
 
 export function Dashboard() {
@@ -223,18 +173,25 @@ export function Dashboard() {
   const [renameKb, setRenameKb] = useState<KnowledgeBase | null>(null);
   const { navigate } = useRouter();
   const toast = useToast();
-  const loaded = useLoaded();
-  const { kbs, remove, addKB, renameKB } = useKBList();
+  const { kbs, loading, remove, addKB, renameKB } = useKBList();
   const totalSources = kbs.reduce((n, k) => n + k.sources.length, 0);
 
-  const [userName] = useState(() => {
-    try {
-      const u = JSON.parse(localStorage.getItem("dm-user") || "{}");
-      return u.full_name || "Scholar";
-    } catch {
-      return "Scholar";
-    }
-  });
+  const [userName, setUserName] = useState("Scholar");
+
+  useEffect(() => {
+    const token = localStorage.getItem("dm-token");
+    if (!token) return;
+    fetch(`${API_BASE}/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && data.full_name) {
+          setUserName(data.full_name);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const greeting = (() => {
     const hour = new Date().getHours();
