@@ -223,6 +223,7 @@ async function fetchClientYouTubeCaptions(url: string): Promise<any[] | null> {
     const videoId = match[1];
 
     const proxyUrls = [
+      `https://corsproxy.io/?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}`,
       `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}`,
       `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}`,
     ];
@@ -231,7 +232,7 @@ async function fetchClientYouTubeCaptions(url: string): Promise<any[] | null> {
     for (const proxy of proxyUrls) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3500);
+        const timeoutId = setTimeout(() => controller.abort(), 4500);
         const res = await fetch(proxy, { signal: controller.signal });
         clearTimeout(timeoutId);
         if (res.ok) {
@@ -255,8 +256,36 @@ async function fetchClientYouTubeCaptions(url: string): Promise<any[] | null> {
     const captionUrl = enTrack.baseUrl;
     if (!captionUrl) return null;
 
-    const xmlRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(captionUrl)}`);
-    const xmlText = await xmlRes.text();
+    let xmlText = "";
+    // 1. Direct browser fetch (residential IP, fastest)
+    try {
+      const directRes = await fetch(captionUrl);
+      if (directRes.ok) {
+        xmlText = await directRes.text();
+      }
+    } catch {}
+
+    // 2. Fallback to corsproxy.io
+    if (!xmlText) {
+      try {
+        const cpRes = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(captionUrl)}`);
+        if (cpRes.ok) {
+          xmlText = await cpRes.text();
+        }
+      } catch {}
+    }
+
+    // 3. Fallback to allorigins
+    if (!xmlText) {
+      try {
+        const aoRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(captionUrl)}`);
+        if (aoRes.ok) {
+          xmlText = await aoRes.text();
+        }
+      } catch {}
+    }
+
+    if (!xmlText) return null;
 
     const parser = new DOMParser();
     const xmlDoc = parser.parseFromString(xmlText, "text/xml");

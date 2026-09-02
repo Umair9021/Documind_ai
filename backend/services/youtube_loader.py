@@ -204,7 +204,8 @@ Output ONLY valid JSON matching this schema:
                                 break
                         except Exception:
                             continue
-        except Exception:
+        except Exception as e:
+            print(f"[YouTubeTranscriptApi Error] {e}")
             raw_transcript = None
 
         segments = []
@@ -216,12 +217,18 @@ Output ONLY valid JSON matching this schema:
             for entry in raw_transcript:
                 text = ""
                 start = 0.0
-                if isinstance(entry, dict):
-                    text = entry.get('text', '').strip()
-                    start = float(entry.get('start', 0.0))
-                elif hasattr(entry, 'text'):
-                    text = getattr(entry, 'text', '').strip()
+                if hasattr(entry, 'text'):
+                    text = str(getattr(entry, 'text', '')).strip()
                     start = float(getattr(entry, 'start', 0.0))
+                elif isinstance(entry, dict):
+                    text = str(entry.get('text', '')).strip()
+                    start = float(entry.get('start', 0.0))
+                else:
+                    try:
+                        text = str(entry['text']).strip()
+                        start = float(entry['start'])
+                    except Exception:
+                        pass
 
                 if not text:
                     continue
