@@ -345,11 +345,15 @@ USER QUESTION:
 {query}
 
 INSTRUCTIONS:
-1. Answer the question accurately and directly based on the provided context excerpts.
-2. If the user asks to explain a concept or document, provide a clear, coherent explanation highlighting the key concepts and ideas.
-3. Structure your answer cleanly with bold key terms where helpful without adding unrequested preamble sections.
-4. Do NOT output any HTML tags (like <br> or <div>).
-5. Do not fabricate facts outside the provided sources."""
+1. Provide a comprehensive, in-depth, and well-structured answer grounded strictly in the provided context excerpts.
+2. When explaining a document, algorithm, architecture, or concept:
+   - Start with a clear, informative **Executive Summary / Overview**.
+   - Break down the **Core Concepts & Mechanisms** in detail using descriptive headings (###) and bullet points with **bold terms**.
+   - Walk through the **Step-by-Step Workflow or Technical Details** mentioned in the document.
+   - Highlight **Key Takeaways, Practical Applications, or Parameters** from the text.
+3. Write thorough, substantive explanations rather than brief summaries, ensuring all nuances from the excerpts are covered.
+4. Ground every statement strictly in the provided excerpts without fabricating information.
+5. Format cleanly with standard Markdown (headings, bullet points, bold key terms) and do NOT output raw HTML tags."""
 
     def format_context(self, retrieved_chunks: List[Dict[str, Any]], group_by_source: bool = False) -> Tuple[str, List[Citation]]:
         context_parts = []
@@ -495,10 +499,7 @@ INSTRUCTIONS:
             "in 5 lines", "in 3 lines", "only summarize", "just summarize", "quick summary"
         ])
         
-        is_deep_dive = not has_constraint and any(k in q_lower for k in [
-            "in-depth", "indepth", "comprehensive", "elaborate", "full explanation", "all details",
-            "deep dive", "thorough breakdown", "complete analysis", "everything about"
-        ])
+        is_deep_dive = not has_constraint
 
         effective_top_k = 10 if is_deep_dive else top_k
 
@@ -538,7 +539,7 @@ INSTRUCTIONS:
         )
 
         # 5. Generate LLM Answer
-        max_tokens = 2500 if (is_global_summary or is_deep_dive) else 1500
+        max_tokens = 2500
         llm_response = self._call_llm(prompt, max_tokens=max_tokens)
         if llm_response:
             answer = llm_response
