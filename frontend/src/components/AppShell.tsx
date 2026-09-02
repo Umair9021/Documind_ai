@@ -117,15 +117,7 @@ function UserBlock({ onNavigate }: { onNavigate?: () => void }) {
     fetch(`${API_BASE}/auth/me`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then((res) => {
-        if (res.status === 401 || res.status === 403) {
-          localStorage.removeItem("dm-token");
-          localStorage.removeItem("dm-user");
-          navigate("/login");
-          return null;
-        }
-        return res.json();
-      })
+      .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data && data.full_name) {
           setProfile({ full_name: data.full_name, email: data.email });
