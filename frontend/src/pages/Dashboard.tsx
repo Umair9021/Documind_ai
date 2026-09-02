@@ -174,6 +174,7 @@ export function Dashboard() {
   const { navigate } = useRouter();
   const toast = useToast();
   const { kbs, loading, remove, addKB, renameKB } = useKBList();
+  const loaded = !loading;
   const totalSources = kbs.reduce((n, k) => n + k.sources.length, 0);
 
   const [userName, setUserName] = useState("Scholar");
@@ -266,8 +267,8 @@ export function KnowledgeBases() {
   const [q, setQ] = useState("");
   const { navigate } = useRouter();
   const toast = useToast();
-  const loaded = useLoaded();
-  const { kbs, remove, addKB, renameKB } = useKBList();
+  const { kbs, loading, remove, addKB, renameKB } = useKBList();
+  const loaded = !loading;
   const list = kbs.filter((k) => k.name.toLowerCase().includes(q.toLowerCase()));
   const create = async (name: string, desc = "") => {
     setModal(false);
