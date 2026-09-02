@@ -27,6 +27,8 @@ function useKB(id: string) {
                 name: s.name,
                 type: s.source_type || "pdf",
                 status: s.status || "ready",
+                chunks: s.chunk_count || 0,
+                url: s.url || "",
                 added: "recently",
                 meta: `${(s.source_type || "doc").toUpperCase()}${s.file_size_bytes ? ` · ${(s.file_size_bytes / (1024 * 1024)).toFixed(1)} MB` : ""}`,
               }));
@@ -613,15 +615,48 @@ function SourceDetails({ kb, source }: { kb: KnowledgeBase; source: Source }) {
   const toast = useToast();
   const loc = query.get("loc");
   const highlightRef = useRef<HTMLDivElement>(null);
+  const [confirm, setConfirm] = useState(false);
+  const [previewData, setPreviewData] = useState<{
+    preview_text?: string;
+    page_count?: number;
+    chunk_count?: number;
+  } | null>(null);
+
   useEffect(() => {
     if (loc) highlightRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [loc]);
-  const [confirm, setConfirm] = useState(false);
+
+  useEffect(() => {
+    const token = localStorage.getItem("dm-token") || "";
+    if (!token || !source.id) return;
+    fetch(`${API_BASE}/sources/${source.id}/preview`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data) setPreviewData(data);
+      })
+      .catch(() => {});
+  }, [source.id]);
+
   const isYt = source.type === "youtube";
+  const displayPages = previewData?.page_count ?? source.pages ?? (isYt ? null : 1);
+  const displayChunks = previewData?.chunk_count ?? source.chunks ?? 0;
 
   const facts = isYt
-    ? [["Type", "YouTube video"], ["Duration", source.duration ?? "—"], ["Transcript", source.status === "ready" ? "Indexed" : "Pending"], ["Added", source.added]]
-    : [["Type", source.type.toUpperCase()], ["Pages", source.pages ? String(source.pages) : "—"], ["Chunks", source.chunks ? String(source.chunks) : "—"], ["Added", source.added]];
+    ? [
+        ["Type", "YouTube video"],
+        ["Duration", source.duration ?? "—"],
+        ["Chunks", displayChunks > 0 ? `${displayChunks} chunks` : "—"],
+        ["Transcript", source.status === "ready" ? "Indexed" : "Pending"],
+        ["Added", source.added],
+      ]
+    : [
+        ["Type", source.type.toUpperCase()],
+        ["Pages", displayPages ? `${displayPages} pages` : "—"],
+        ["Chunks", displayChunks > 0 ? `${displayChunks} chunks` : "—"],
+        ["Added", source.added],
+      ];
 
   return (
     <div className="w-full max-w-5xl px-6 py-8 sm:px-8">
@@ -665,11 +700,17 @@ function SourceDetails({ kb, source }: { kb: KnowledgeBase; source: Source }) {
           ) : isYt ? (
             <div className="mt-3">
               <div className="flex aspect-video items-center justify-center rounded-xl border border-border bg-surface text-muted"><Icon name="youtube" className="size-10 text-failed" /></div>
-              <p className={cx("mt-3 rounded-lg p-2 text-sm leading-relaxed text-muted transition-colors", loc && "bg-accent-soft/60 ring-1 ring-accent/20")}>{loc ?? "00:12"} — Video transcript indexed and ready for hybrid retrieval.</p>
+              <p className={cx("mt-3 rounded-lg p-2 text-sm leading-relaxed text-muted transition-colors", loc && "bg-accent-soft/60 ring-1 ring-accent/20")}>{loc ?? "00:00"} — Video transcript indexed and ready for hybrid retrieval.</p>
             </div>
           ) : (
-            <div className="mt-3 space-y-2.5 text-sm leading-relaxed text-muted">
-              <p>Document parsed and indexed into vector chunks by the Python backend.</p>
+            <div className="mt-3 space-y-2.5 text-sm leading-relaxed text-foreground/90 max-h-96 overflow-y-auto pr-2 [scrollbar-width:thin]">
+              {previewData?.preview_text ? (
+                <div className="whitespace-pre-wrap font-sans text-xs sm:text-sm leading-relaxed bg-surface/60 rounded-xl p-3.5 border border-border/60">
+                  {previewData.preview_text}
+                </div>
+              ) : (
+                <p className="text-muted text-sm">Loading document preview from vector index...</p>
+              )}
             </div>
           )}
         </div>
@@ -680,7 +721,7 @@ function SourceDetails({ kb, source }: { kb: KnowledgeBase; source: Source }) {
             <dl className="mt-3 space-y-2.5">
               {facts.map(([k, v]) => (
                 <div key={k} className="flex items-center justify-between text-sm">
-                  <dt className="text-muted">{k}</dt><dd className="font-mono">{v}</dd>
+                  <dt className="text-muted">{k}</dt><dd className="font-mono font-medium">{v}</dd>
                 </div>
               ))}
             </dl>

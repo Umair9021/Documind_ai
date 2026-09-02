@@ -199,6 +199,33 @@ def add_youtube_source(yt_in: YouTubeSourceCreate, current_user_id: str = Depend
         failed_source = db_get_source(source_id, current_user_id)
         return SourceResponse(**failed_source)
 
+@router.get("/{source_id}/preview")
+def get_source_preview(source_id: str, current_user_id: str = Depends(get_current_user_id)):
+    source = db_get_source(source_id, current_user_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found or access denied.")
+    kb_id = source["kb_id"]
+    chunks = vector_store.get_all_kb_chunks(kb_id)
+    src_chunks = [c for c in chunks if c.get("metadata", {}).get("source_id") == source_id]
+    
+    src_chunks = sorted(src_chunks, key=lambda x: x.get("metadata", {}).get("chunk_index", 0))
+    preview_text = "\n\n".join([c["content"] for c in src_chunks[:6]]) if src_chunks else "Document processed and indexed into vector database."
+    
+    pages = set()
+    for c in src_chunks:
+        p = c.get("metadata", {}).get("page_number")
+        if p:
+            pages.add(p)
+            
+    return {
+        "source_id": source_id,
+        "name": source["name"],
+        "chunk_count": len(src_chunks) or source.get("chunk_count", 0),
+        "page_count": len(pages) if pages else (1 if source["source_type"] != "youtube" else None),
+        "preview_text": preview_text,
+        "chunks": [{"id": c["id"], "content": c["content"], "metadata": c.get("metadata", {})} for c in src_chunks[:10]]
+    }
+
 @router.delete("/{source_id}")
 def delete_source(source_id: str, current_user_id: str = Depends(get_current_user_id)):
     source = db_get_source(source_id, current_user_id)
