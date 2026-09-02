@@ -61,10 +61,19 @@ async def upload_documents(
 ):
     kb = db_get_kb(kb_id, current_user_id)
     if not kb:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Knowledge Base not found or access denied."
-        )
+        from datetime import datetime
+        from database import get_db_connection
+        try:
+            conn = get_db_connection()
+            now = datetime.now().isoformat()
+            conn.execute(
+                "INSERT OR IGNORE INTO knowledge_bases (id, user_id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (kb_id, current_user_id, "Knowledge Base", "", now, now)
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
     max_storage_bytes = SYSTEM_LIMITS.get("max_storage_mb_per_user", 50) * 1024 * 1024
     used_storage_bytes = db_get_user_storage_bytes(current_user_id)
@@ -139,10 +148,19 @@ async def upload_documents(
 def add_youtube_source(yt_in: YouTubeSourceCreate, current_user_id: str = Depends(get_current_user_id)):
     kb = db_get_kb(yt_in.kb_id, current_user_id)
     if not kb:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Knowledge Base not found or access denied."
-        )
+        from datetime import datetime
+        from database import get_db_connection
+        try:
+            conn = get_db_connection()
+            now = datetime.now().isoformat()
+            conn.execute(
+                "INSERT OR IGNORE INTO knowledge_bases (id, user_id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (yt_in.kb_id, current_user_id, "Knowledge Base", "", now, now)
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
     try:
         segments, video_title, video_id = YouTubeLoader.load_transcript(yt_in.url)

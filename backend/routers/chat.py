@@ -74,10 +74,19 @@ def get_conversation(kb_id: str, current_user_id: str = Depends(get_current_user
 def query_knowledge_base(query_in: QueryRequest, current_user_id: str = Depends(get_current_user_id)):
     kb = db_get_kb(query_in.kb_id, current_user_id)
     if not kb:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Knowledge Base not found or private access denied."
-        )
+        from datetime import datetime
+        from database import get_db_connection
+        try:
+            conn = get_db_connection()
+            now = datetime.now().isoformat()
+            conn.execute(
+                "INSERT OR IGNORE INTO knowledge_bases (id, user_id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (query_in.kb_id, current_user_id, "Knowledge Base", "", now, now)
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
     conv = db_get_or_create_conversation(query_in.kb_id, current_user_id)
     conv_id = conv["id"]

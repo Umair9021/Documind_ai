@@ -242,18 +242,22 @@ class RetrieverFactory:
             filters["source_name"] = target_sources[0]
 
         # Step 5: Global summary query check
-        is_global_summary = any(k in q_norm for k in [
-            "summarize all", "all document", "all docuemnt", "all files", "summary of all", "overview of all", "what documents"
+        is_summary_query = any(k in q_norm for k in [
+            "summarize", "summary", "overview", "what is this", "tell me about", "brief",
+            "explain the", "explain this", "what happens in", "key points", "main points",
+            "takeaways", "video about", "document about", "lecture about", "what is in this",
+            "all document", "all files", "what documents", "youtube video", "video"
         ])
 
-        if is_global_summary and not target_sources:
+        if is_summary_query and not target_sources:
             results = self.retrieve_all_sources_summary(kb_id)
-            trace_steps.append({
-                "step_name": "Multi-Document Balanced Retrieval",
-                "description": f"Gathered representative overview chunks across {len(results)} source documents.",
-                "data": results
-            })
-            return results, {"steps": trace_steps, "strategy": "multi_source_summary", "is_global_summary": True}
+            if results:
+                trace_steps.append({
+                    "step_name": "Multi-Document Balanced Retrieval",
+                    "description": f"Gathered representative overview chunks across {len(results)} sources.",
+                    "data": results
+                })
+                return results, {"steps": trace_steps, "strategy": "multi_source_summary", "is_global_summary": True}
 
         # Step 6: Targeted Search by chosen strategy
         if strategy == "similarity":
@@ -281,8 +285,8 @@ class RetrieverFactory:
             results, variations = self._multiquery_search(kb_id, query, top_k=top_k, filters=filters)
             trace_steps.append({
                 "step_name": "Multi-Query Expansion",
-                "description": f"Expanded into {len(variations)} perspective queries for broad coverage.",
-                "data": {"variations": variations, "results": results}
+                "description": f"Generated query variations: {variations}",
+                "data": results
             })
         else:
             # Default: Hybrid RRF
@@ -297,6 +301,17 @@ class RetrieverFactory:
         filtered_results = [r for r in results if r.get("score", 1.0) >= similarity_threshold]
         if not filtered_results and results:
             filtered_results = results[:top_k]
+
+        # Resilient Overview Fallback: If 0 chunks matched, fetch broad chunks from available sources
+        if not filtered_results:
+            fallback = self.retrieve_all_sources_summary(kb_id)
+            if fallback:
+                filtered_results = fallback
+                trace_steps.append({
+                    "step_name": "Resilient Overview Fallback",
+                    "description": f"Specific search yielded 0 matches; retrieved {len(filtered_results)} representative source chunks for grounding.",
+                    "data": filtered_results
+                })
 
         trace_steps.append({
             "step_name": "Final Ranked Chunks",
