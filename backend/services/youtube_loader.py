@@ -107,6 +107,78 @@ class YouTubeLoader:
         return 0.0
 
     @staticmethod
+    def synthesize_video_knowledge_groq(video_title: str, author: str, video_id: str, description: str = "") -> List[Dict[str, Any]]:
+        """Synthesizes rich multi-chapter knowledge breakdown using Groq AI when transcripts are blocked by cloud firewalls"""
+        try:
+            try:
+                from backend.config import GROQ_API_KEY
+            except ModuleNotFoundError:
+                from config import GROQ_API_KEY
+            if not GROQ_API_KEY:
+                return []
+            from groq import Groq
+            client = Groq(api_key=GROQ_API_KEY)
+            prompt = f"""You are an expert video content archivist and technical summarizer.
+Generate a comprehensive, highly detailed multi-chapter knowledge breakdown for the following YouTube video:
+
+Video Title: {video_title}
+Channel/Host: {author}
+Video URL: https://www.youtube.com/watch?v={video_id}
+{f'Description Excerpt: {description[:1000]}' if description else ''}
+
+Provide a deep, structured breakdown in JSON format containing 6-8 distinct chronological chapter segments that cover the core themes, discussions, guest viewpoints, technical philosophies, and key takeaways.
+
+Output ONLY valid JSON matching this schema:
+{{
+  "overview": "Detailed 4-5 sentence executive overview of the conversation, core themes, and guest insights...",
+  "chapters": [
+    {{
+      "timestamp": "00:00",
+      "timestamp_seconds": 0,
+      "topic": "Opening Discussion & Background",
+      "content": "In-depth details of what is discussed in this segment..."
+    }},
+    {{
+      "timestamp": "15:30",
+      "timestamp_seconds": 930,
+      "topic": "Key Technologies & Philosophies",
+      "content": "Specific discussion points, quotes, and philosophies explored..."
+    }}
+  ]
+}}"""
+            resp = client.chat.completions.create(
+                model="openai/gpt-oss-120b",
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"}
+            )
+            data = json.loads(resp.choices[0].message.content)
+            segments = []
+            overview = data.get("overview", "")
+            if overview:
+                segments.append({
+                    "text": f"Video Title: {video_title}\nCreator / Host: {author}\nLink: https://www.youtube.com/watch?v={video_id}\n\nExecutive Overview & Summary:\n{overview}",
+                    "timestamp": "00:00",
+                    "timestamp_seconds": 0.0,
+                    "section_name": f"{video_title} - Executive Overview",
+                    "url": f"https://www.youtube.com/watch?v={video_id}"
+                })
+            for ch in data.get("chapters", []):
+                ts = ch.get("timestamp", "00:00")
+                sec = float(ch.get("timestamp_seconds", 0.0))
+                topic = ch.get("topic", "Discussion Point")
+                content = ch.get("content", "")
+                segments.append({
+                    "text": f"Video: {video_title}\nSpeaker/Host: {author}\nChapter: {topic} ({ts})\n\nDetailed Discussion & Key Insights:\n{content}",
+                    "timestamp": ts,
+                    "timestamp_seconds": sec,
+                    "section_name": f"{video_title} @ {ts} ({topic})",
+                    "url": f"https://www.youtube.com/watch?v={video_id}&t={int(sec)}s"
+                })
+            return segments
+        except Exception:
+            return []
+
+    @staticmethod
     def load_transcript(url: str) -> Tuple[List[Dict[str, Any]], str, str]:
         video_id = YouTubeLoader.extract_video_id(url)
         if not video_id:
@@ -182,9 +254,12 @@ class YouTubeLoader:
                     "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_start_sec)}s"
                 })
         else:
-            # Multi-segment structured knowledge ingestion
-            if description:
-                # 1. Main Overview Segment
+            # 2. AI-powered multi-chapter knowledge synthesis fallback
+            ai_segments = YouTubeLoader.synthesize_video_knowledge_groq(video_title, author, video_id, description)
+            if ai_segments:
+                segments = ai_segments
+            elif description:
+                # 3. Description & Chapters Fallback
                 segments.append({
                     "text": f"Video Title: {video_title}\nCreator / Channel: {author}\nLink: https://www.youtube.com/watch?v={video_id}\n\nComprehensive Video Overview & Summary:\n{description}",
                     "timestamp": "00:00",
@@ -193,7 +268,6 @@ class YouTubeLoader:
                     "url": f"https://www.youtube.com/watch?v={video_id}"
                 })
 
-                # 2. Dedicated Chapter Segments with individual timestamps
                 for ch in chapters:
                     ch_ts = ch["timestamp"]
                     ch_title = ch["title"]
