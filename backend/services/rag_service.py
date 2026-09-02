@@ -345,15 +345,12 @@ USER QUESTION:
 {query}
 
 INSTRUCTIONS:
-1. Provide a comprehensive, in-depth, and well-structured answer grounded strictly in the provided context excerpts.
-2. When explaining a document, algorithm, architecture, or concept:
-   - Start with a clear, informative **Executive Summary / Overview**.
-   - Break down the **Core Concepts & Mechanisms** in detail using descriptive headings (###) and bullet points with **bold terms**.
-   - Walk through the **Step-by-Step Workflow or Technical Details** mentioned in the document.
-   - Highlight **Key Takeaways, Practical Applications, or Parameters** from the text.
-3. Write thorough, substantive explanations rather than brief summaries, ensuring all nuances from the excerpts are covered.
-4. Ground every statement strictly in the provided excerpts without fabricating information.
-5. Format cleanly with standard Markdown (headings, bullet points, bold key terms) and do NOT output raw HTML tags."""
+1. Answer the question directly, concisely, and accurately based strictly on the provided context excerpts.
+2. Give ONLY what is asked for:
+   - For factual or definition questions (e.g. "what is HNSW stand for?", "who wrote X?", "what is the formula for Y?"), provide a direct, precise answer without unrequested essay sections or unsolicited preambles.
+   - Do NOT add unnecessary headers (like '## Overview' or '1. Definition and Core Concept') unless explicitly requested.
+3. Ground your answer strictly in the context excerpts without hallucinating facts outside the document.
+4. Format cleanly with standard Markdown (e.g. bold terms) and do NOT output raw HTML tags."""
 
     def format_context(self, retrieved_chunks: List[Dict[str, Any]], group_by_source: bool = False) -> Tuple[str, List[Citation]]:
         context_parts = []
@@ -491,7 +488,7 @@ INSTRUCTIONS:
                 "raw_context": ""
             }
 
-        # Detect if user explicitly wants an in-depth deep dive vs concise/constrained response
+        # Detect if user explicitly wants an in-depth deep dive vs concise direct answer
         q_lower = query.lower()
         has_constraint = any(k in q_lower for k in [
             "line", "lines", "bullet", "bullets", "point", "points", "sentence", "sentences",
@@ -499,7 +496,11 @@ INSTRUCTIONS:
             "in 5 lines", "in 3 lines", "only summarize", "just summarize", "quick summary"
         ])
         
-        is_deep_dive = not has_constraint
+        is_deep_dive = not has_constraint and any(k in q_lower for k in [
+            "explain", "in-depth", "indepth", "comprehensive", "elaborate", "full explanation",
+            "deep dive", "breakdown", "detailed", "details", "walk me through", "summarize",
+            "summary", "tell me about", "overview of", "describe"
+        ])
 
         effective_top_k = 10 if is_deep_dive else top_k
 
