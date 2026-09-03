@@ -289,16 +289,24 @@ async function fetchClientYouTubeCaptions(url: string): Promise<any[] | null> {
 
     const parser = new DOMParser();
     const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+    const pNodes = xmlDoc.getElementsByTagName("p");
     const textNodes = xmlDoc.getElementsByTagName("text");
-    if (!textNodes || textNodes.length === 0) return null;
+    const nodes = pNodes.length > 0 ? pNodes : textNodes;
+    if (!nodes || nodes.length === 0) return null;
 
     const segments: any[] = [];
     let currentBlockText: string[] = [];
     let currentStartSec = 0;
 
-    for (let i = 0; i < textNodes.length; i++) {
-      const node = textNodes[i];
-      const start = parseFloat(node.getAttribute("start") || "0");
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      let start = 0;
+      if (node.hasAttribute("t")) {
+        start = parseFloat(node.getAttribute("t") || "0") / 1000.0;
+      } else if (node.hasAttribute("start")) {
+        start = parseFloat(node.getAttribute("start") || "0");
+      }
+
       const cleanText = (node.textContent || "")
         .replace(/&#39;/g, "'")
         .replace(/&quot;/g, '"')
@@ -316,7 +324,7 @@ async function fetchClientYouTubeCaptions(url: string): Promise<any[] | null> {
       currentBlockText.push(cleanText);
 
       const accumulated = currentBlockText.join(" ");
-      if (accumulated.length >= 300) {
+      if (accumulated.length >= 350) {
         const mins = Math.floor(currentStartSec / 60);
         const secs = Math.floor(currentStartSec % 60);
         const hours = Math.floor(mins / 60);

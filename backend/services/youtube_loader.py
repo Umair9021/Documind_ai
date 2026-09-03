@@ -187,7 +187,87 @@ Output ONLY valid JSON matching this schema:
         video_title, author, description, chapters = YouTubeLoader.fetch_video_metadata(url, video_id)
         raw_transcript = None
 
-        # 1. Try YouTubeTranscriptApi().fetch
+        # 1. Primary: InnerTube API direct timedtext extraction (unblocked, 100% full transcript)
+        try:
+            html_url = f"https://www.youtube.com/watch?v={video_id}"
+            h_req = urllib.request.Request(
+                html_url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Cookie": "SOCS=CAESEwgDEgk2OTg1NzQ3MjQaAmVuIAEaBgiA_LyaBg;"
+                }
+            )
+            with urllib.request.urlopen(h_req, timeout=10) as r:
+                html_txt = r.read().decode("utf-8")
+
+            key_match = re.search(r'"INNERTUBE_API_KEY":"(.*?)"', html_txt)
+            api_key = key_match.group(1) if key_match else ""
+
+            if api_key:
+                player_url = f"https://www.youtube.com/youtubei/v1/player?key={api_key}"
+                p_payload = {
+                    "context": {"client": {"clientName": "ANDROID", "clientVersion": "20.10.38"}},
+                    "videoId": video_id
+                }
+                p_req = urllib.request.Request(
+                    player_url,
+                    data=json.dumps(p_payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "User-Agent": "com.google.android.youtube/20.10.38"},
+                    method="POST"
+                )
+                with urllib.request.urlopen(p_req, timeout=10) as p_resp:
+                    p_data = json.loads(p_resp.read().decode("utf-8"))
+                    captions = p_data.get("captions", {}).get("playerCaptionsTracklistRenderer", {}).get("captionTracks", [])
+                    if captions:
+                        caption_url = captions[0].get("baseUrl")
+                        tt_req = urllib.request.Request(caption_url, headers={"User-Agent": "com.google.android.youtube/20.10.38"})
+                        with urllib.request.urlopen(tt_req, timeout=10) as tt_resp:
+                            import xml.etree.ElementTree as ET
+                            xml_bytes = tt_resp.read()
+                            root = ET.fromstring(xml_bytes)
+                            p_nodes = root.findall(".//p") or root.findall(".//text")
+                            
+                            current_block = []
+                            current_sec = 0.0
+                            for node in p_nodes:
+                                t_ms = float(node.attrib.get('t', 0)) if 't' in node.attrib else float(node.attrib.get('start', 0)) * 1000.0
+                                line_txt = "".join(node.itertext()).strip()
+                                if not line_txt:
+                                    continue
+                                if not current_block:
+                                    current_sec = t_ms / 1000.0
+                                current_block.append(line_txt)
+                                
+                                acc = " ".join(current_block)
+                                if len(acc) >= 350:
+                                    ts_str = YouTubeLoader.format_timestamp(current_sec)
+                                    segments.append({
+                                        "text": acc,
+                                        "timestamp": ts_str,
+                                        "timestamp_seconds": current_sec,
+                                        "section_name": f"{video_title} @ {ts_str}",
+                                        "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_sec)}s"
+                                    })
+                                    current_block = []
+                            
+                            if current_block:
+                                acc = " ".join(current_block)
+                                ts_str = YouTubeLoader.format_timestamp(current_sec)
+                                segments.append({
+                                    "text": acc,
+                                    "timestamp": ts_str,
+                                    "timestamp_seconds": current_sec,
+                                    "section_name": f"{video_title} @ {ts_str}",
+                                    "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_sec)}s"
+                                })
+                            
+                            if segments:
+                                return segments, video_title, video_id
+        except Exception as e:
+            print(f"[InnerTube Captions Server Error] {e}")
+
+        # 2. Fallback: Try YouTubeTranscriptApi().fetch
         try:
             ytt_api = YouTubeTranscriptApi()
             try:
