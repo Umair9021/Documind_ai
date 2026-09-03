@@ -455,3 +455,54 @@ Output ONLY valid JSON matching this schema:
                 })
 
         return segments, video_title, video_id
+
+    @staticmethod
+    def parse_raw_transcript_text(text: str, video_title: str = "YouTube Video", video_url: str = "") -> List[Dict[str, Any]]:
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
+        segments: List[Dict[str, Any]] = []
+        current_time_str = "00:00"
+        current_sec = 0.0
+        current_block: List[str] = []
+        ts_pattern = re.compile(r'^(?:(\d{1,2}):)?(\d{1,2}):(\d{2})$')
+
+        for line in lines:
+            m = ts_pattern.match(line)
+            if m:
+                parts = [int(p) for p in m.groups() if p is not None]
+                if len(parts) == 3:
+                    h, mins, s = parts
+                    sec = h * 3600 + mins * 60 + s
+                    ts_str = f"{h:02d}:{mins:02d}:{s:02d}"
+                else:
+                    mins, s = parts
+                    sec = mins * 60 + s
+                    ts_str = f"{mins:02d}:{s:02d}"
+
+                if current_block:
+                    acc = " ".join(current_block)
+                    if len(acc) >= 300:
+                        segments.append({
+                            "text": acc,
+                            "timestamp": current_time_str,
+                            "timestamp_seconds": current_sec,
+                            "section_name": f"{video_title} @ {current_time_str}",
+                            "url": f"{video_url}&t={int(current_sec)}s" if video_url else ""
+                        })
+                        current_block = []
+
+                current_time_str = ts_str
+                current_sec = float(sec)
+            else:
+                current_block.append(line)
+
+        if current_block:
+            acc = " ".join(current_block)
+            segments.append({
+                "text": acc,
+                "timestamp": current_time_str,
+                "timestamp_seconds": current_sec,
+                "section_name": f"{video_title} @ {current_time_str}",
+                "url": f"{video_url}&t={int(current_sec)}s" if video_url else ""
+            })
+
+        return segments

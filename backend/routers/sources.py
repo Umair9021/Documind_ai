@@ -166,8 +166,16 @@ def add_youtube_source(yt_in: YouTubeSourceCreate, current_user_id: str = Depend
     video_title = f"YouTube Video ({video_id})"
     segments = []
 
-    # 1. Check if client provided verbatim transcript segments
-    if yt_in.client_transcript_segments and len(yt_in.client_transcript_segments) > 0:
+    # 1. Check if client provided verbatim transcript text or segments
+    if yt_in.client_transcript_text and len(yt_in.client_transcript_text.strip()) > 20:
+        try:
+            meta_title, _, _, _ = YouTubeLoader.fetch_video_metadata(yt_in.url, video_id)
+            if meta_title:
+                video_title = meta_title
+        except Exception:
+            pass
+        segments = YouTubeLoader.parse_raw_transcript_text(yt_in.client_transcript_text, video_title, yt_in.url)
+    elif yt_in.client_transcript_segments and len(yt_in.client_transcript_segments) > 0:
         try:
             meta_title, _, _, _ = YouTubeLoader.fetch_video_metadata(yt_in.url, video_id)
             if meta_title:

@@ -119,6 +119,8 @@ type UploadRow = {
 export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean; onClose: () => void; kbId?: string; onAdded?: () => void }) {
   const [tab, setTab] = useState<"upload" | "youtube">("upload");
   const [url, setUrl] = useState("");
+  const [transcriptText, setTranscriptText] = useState("");
+  const [showManualPaste, setShowManualPaste] = useState(false);
   const [rows, setRows] = useState<UploadRow[]>([]);
   const [uploading, setUploading] = useState(false);
   const toast = useToast();
@@ -418,7 +420,9 @@ async function fetchClientYouTubeCaptions(url: string): Promise<any[] | null> {
         }
 
         const payload: any = { kb_id: kbId, url: currentUrl };
-        if (clientSegments && clientSegments.length > 0) {
+        if (transcriptText.trim().length > 20) {
+          payload.client_transcript_text = transcriptText.trim();
+        } else if (clientSegments && clientSegments.length > 0) {
           payload.client_transcript_segments = clientSegments;
         }
 
@@ -556,6 +560,34 @@ async function fetchClientYouTubeCaptions(url: string): Promise<any[] | null> {
               <Button onClick={addVideo} disabled={!url.trim() || uploading}>{uploading ? "Processing…" : "Add video"}</Button>
             </div>
           </Field>
+
+          <div className="rounded-xl border border-border bg-surface/60 p-3 text-xs">
+            <div className="flex items-center justify-between cursor-pointer select-none" onClick={() => setShowManualPaste(!showManualPaste)}>
+              <div className="flex items-center gap-1.5 font-medium text-foreground">
+                <Icon name="sparkles" className="size-3.5 text-accent" />
+                <span>Need 100% Guaranteed Full Subtitles? (Optional Manual Paste)</span>
+              </div>
+              <button type="button" className="text-muted hover:text-foreground text-[11px] font-medium underline">
+                {showManualPaste ? "Hide" : "Paste Transcript"}
+              </button>
+            </div>
+
+            {showManualPaste && (
+              <div className="mt-3 space-y-2">
+                <p className="text-muted text-[11px] leading-relaxed">
+                  💡 <b>Quick YouTube Copy:</b> In YouTube &rarr; Click <b>... (More)</b> under the video description &rarr; Click <b>"Show transcript"</b> &rarr; Copy &amp; paste text below. DocuMind will index all 200+ verbatim dialogue chunks with second-accurate timestamps!
+                </p>
+                <textarea
+                  value={transcriptText}
+                  onChange={(e) => setTranscriptText(e.target.value)}
+                  placeholder="0:00 Introduction&#10;0:15 Elon Musk discusses AI...&#10;34:04 Like calculating bank interest..."
+                  rows={4}
+                  className="w-full rounded-lg border border-border bg-panel px-3 py-2 text-xs font-mono text-foreground placeholder:text-muted focus:border-accent focus:outline-none"
+                  disabled={uploading}
+                />
+              </div>
+            )}
+          </div>
           {rows.some((r) => r.type === "youtube") && (
             <div className="space-y-2.5">
               <p className="text-[13px] font-medium text-muted">Real-Time Ingestion Pipeline</p>
