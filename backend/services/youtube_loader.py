@@ -185,9 +185,88 @@ Output ONLY valid JSON matching this schema:
             raise ValueError("Invalid YouTube URL. Please provide a standard YouTube video link.")
 
         video_title, author, description, chapters = YouTubeLoader.fetch_video_metadata(url, video_id)
-        raw_transcript = None
+        segments: List[Dict[str, Any]] = []
 
-        # 1. Primary: InnerTube API direct timedtext extraction (unblocked, 100% full transcript)
+        # 1. Primary: yt-dlp direct subtitle extraction (100% resilient on cloud & local)
+        try:
+            import yt_dlp
+            ydl_opts = {
+                'skip_download': True,
+                'writesubtitles': True,
+                'writeautomaticsub': True,
+                'subtitleslangs': ['en', 'en-orig', 'en-US', 'en-GB'],
+                'quiet': True,
+                'no_warnings': True,
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if info:
+                    if not video_title or video_title.startswith("YouTube Video"):
+                        video_title = info.get("title", video_title)
+                    author = info.get("uploader", author)
+                    subs = info.get("subtitles") or info.get("automatic_captions") or {}
+                    
+                    en_tracks = []
+                    for lang_key in ['en', 'en-orig', 'en-US', 'en-GB']:
+                        if lang_key in subs:
+                            en_tracks = subs[lang_key]
+                            break
+                    if not en_tracks and subs:
+                        en_tracks = next(iter(subs.values()), [])
+                    
+                    json3_track = next((t for t in en_tracks if t.get("ext") == "json3"), None)
+                    target_track = json3_track or (en_tracks[0] if en_tracks else None)
+                    
+                    if target_track and target_track.get("url"):
+                        sub_req = urllib.request.Request(target_track["url"], headers={"User-Agent": "Mozilla/5.0"})
+                        with urllib.request.urlopen(sub_req, timeout=12) as sub_resp:
+                            raw_sub = sub_resp.read().decode("utf-8")
+                            
+                            # Parse JSON3 format
+                            if target_track.get("ext") == "json3" or '"events"' in raw_sub[:300]:
+                                data = json.loads(raw_sub)
+                                events = data.get("events", [])
+                                current_block = []
+                                current_sec = 0.0
+                                for ev in events:
+                                    t_ms = float(ev.get("tStartMs", 0))
+                                    segs = ev.get("segs", [])
+                                    line_text = "".join([s.get("utf8", "") for s in segs]).replace("\n", " ").strip()
+                                    if not line_text:
+                                        continue
+                                    if not current_block:
+                                        current_sec = t_ms / 1000.0
+                                    current_block.append(line_text)
+                                    
+                                    acc = " ".join(current_block)
+                                    if len(acc) >= 350:
+                                        ts_str = YouTubeLoader.format_timestamp(current_sec)
+                                        segments.append({
+                                            "text": acc,
+                                            "timestamp": ts_str,
+                                            "timestamp_seconds": current_sec,
+                                            "section_name": f"{video_title} @ {ts_str}",
+                                            "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_sec)}s"
+                                        })
+                                        current_block = []
+                                
+                                if current_block:
+                                    acc = " ".join(current_block)
+                                    ts_str = YouTubeLoader.format_timestamp(current_sec)
+                                    segments.append({
+                                        "text": acc,
+                                        "timestamp": ts_str,
+                                        "timestamp_seconds": current_sec,
+                                        "section_name": f"{video_title} @ {ts_str}",
+                                        "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_sec)}s"
+                                    })
+                                
+                                if segments:
+                                    return segments, video_title, video_id
+        except Exception as e:
+            print(f"[yt-dlp Extraction Error] {e}")
+
+        # 2. Secondary: InnerTube API direct timedtext extraction
         try:
             html_url = f"https://www.youtube.com/watch?v={video_id}"
             h_req = urllib.request.Request(
