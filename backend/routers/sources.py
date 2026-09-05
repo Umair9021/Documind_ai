@@ -427,17 +427,16 @@ def get_source_preview(source_id: str, current_user_id: str = Depends(get_curren
     src_chunks = sorted(src_chunks, key=lambda x: x.get("metadata", {}).get("chunk_index", 0))
     preview_text = "\n\n".join([c["content"] for c in src_chunks[:6]]) if src_chunks else "Document processed and indexed into vector database."
     
-    pages = set()
-    for c in src_chunks:
-        p = c.get("metadata", {}).get("page_number")
-        if p:
-            pages.add(p)
-            
+    tier_used = None
+    if src_chunks:
+        tier_used = src_chunks[0].get("metadata", {}).get("tier")
+
     return {
         "source_id": source_id,
         "name": source["name"],
         "chunk_count": len(src_chunks) or source.get("chunk_count", 0),
         "page_count": len(pages) if pages else (1 if source["source_type"] != "youtube" else None),
+        "tier": tier_used,
         "preview_text": preview_text,
         "chunks": [{"id": c["id"], "content": c["content"], "metadata": c.get("metadata", {})} for c in src_chunks[:10]]
     }

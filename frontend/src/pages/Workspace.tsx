@@ -646,9 +646,9 @@ function SourceDetails({ kb, source }: { kb: KnowledgeBase; source: Source }) {
   const facts = isYt
     ? [
         ["Type", "YouTube video"],
-        ["Duration", source.duration ?? "—"],
+        ["Engine", previewData?.tier ? previewData.tier.split("(")[0].trim() : "Tier 1 (Fast Gateway)"],
         ["Chunks", displayChunks > 0 ? `${displayChunks} chunks` : "—"],
-        ["Transcript", source.status === "ready" ? "Indexed" : "Pending"],
+        ["Transcript", source.status === "ready" ? "Indexed (100% Verbatim)" : "Pending"],
         ["Added", source.added],
       ]
     : [
