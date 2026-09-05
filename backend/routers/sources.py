@@ -435,7 +435,7 @@ def get_source_preview(source_id: str, current_user_id: str = Depends(get_curren
         "source_id": source_id,
         "name": source["name"],
         "chunk_count": len(src_chunks) or source.get("chunk_count", 0),
-        "page_count": len(pages) if pages else (1 if source["source_type"] != "youtube" else None),
+        "page_count": source.get("page_count") if source["source_type"] != "youtube" else None,
         "tier": tier_used,
         "preview_text": preview_text,
         "chunks": [{"id": c["id"], "content": c["content"], "metadata": c.get("metadata", {})} for c in src_chunks[:10]]

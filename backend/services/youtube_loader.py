@@ -208,98 +208,11 @@ Output ONLY valid JSON matching this schema:
         return candidates
 
     # ==========================================
-    # TIER 1: YouTubeTranscriptApi Subtitle Extraction (Strict English, 2-4s)
+    # TIER 1: InnerTube Android API TimedText Subtitles (Strict English, 1-2s, Bot-Immune)
     # ==========================================
     @staticmethod
-    def extract_tier_1_transcript_api(url: str, video_id: str, video_title: str) -> List[Dict[str, Any]]:
-        """Tier 1: High-speed verbatim English subtitle extraction using YouTubeTranscriptApi (Direct & Proxy pool)."""
-        from youtube_transcript_api import YouTubeTranscriptApi
-        proxy_candidates = YouTubeLoader.get_proxy_candidates()
-
-        for p_cand in proxy_candidates:
-            try:
-                ytt = YouTubeTranscriptApi()
-                t_list = ytt.list(video_id)
-                target_t = None
-                
-                # 1. Strictly look for manual English subtitles
-                try:
-                    target_t = t_list.find_transcript(['en', 'en-US', 'en-GB', 'en-CA', 'en-AU', 'en-IN'])
-                except Exception:
-                    pass
-                
-                # 2. Look for auto-generated English subtitles
-                if not target_t:
-                    try:
-                        target_t = t_list.find_generated_transcript(['en', 'en-US', 'en-GB', 'en-CA'])
-                    except Exception:
-                        pass
-                
-                # 3. Look for any English track
-                if not target_t:
-                    for t in t_list:
-                        if t.language_code.startswith('en'):
-                            target_t = t
-                            break
-                            
-                # 4. If only non-English is available, translate to English
-                if not target_t:
-                    for t in t_list:
-                        if t.is_translatable:
-                            target_t = t.translate('en')
-                            break
-
-                if target_t:
-                    snippets = target_t.fetch()
-                    segments = []
-                    current_block = []
-                    current_sec = 0.0
-
-                    for s in snippets:
-                        t_sec = float(getattr(s, 'start', 0.0) if hasattr(s, 'start') else s.get('start', 0.0))
-                        text = str(getattr(s, 'text', '') if hasattr(s, 'text') else s.get('text', '')).replace('\n', ' ').strip()
-                        if not text:
-                            continue
-                        if not current_block:
-                            current_sec = t_sec
-                        current_block.append(text)
-                        acc = " ".join(current_block)
-                        if len(acc) >= 350:
-                            ts_str = YouTubeLoader.format_timestamp(current_sec)
-                            segments.append({
-                                "text": acc,
-                                "timestamp": ts_str,
-                                "timestamp_seconds": current_sec,
-                                "section_name": f"{video_title} @ {ts_str}",
-                                "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_sec)}s",
-                                "tier": "Tier 1 (YouTubeTranscriptApi English)"
-                            })
-                            current_block = []
-
-                    if current_block:
-                        acc = " ".join(current_block)
-                        ts_str = YouTubeLoader.format_timestamp(current_sec)
-                        segments.append({
-                            "text": acc,
-                            "timestamp": ts_str,
-                            "timestamp_seconds": current_sec,
-                            "section_name": f"{video_title} @ {ts_str}",
-                            "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_sec)}s",
-                            "tier": "Tier 1 (YouTubeTranscriptApi English)"
-                        })
-
-                    if segments:
-                        return segments
-            except Exception:
-                pass
-        return []
-
-    # ==========================================
-    # TIER 2: InnerTube Android API TimedText Subtitles (Strict English, 1-3s)
-    # ==========================================
-    @staticmethod
-    def extract_tier_2_innertube(url: str, video_id: str, video_title: str) -> List[Dict[str, Any]]:
-        """Tier 2: Direct Google InnerTube client player API timedtext parser with strict English track selection."""
+    def extract_tier_1_innertube(url: str, video_id: str, video_title: str) -> List[Dict[str, Any]]:
+        """Tier 1: Direct Google InnerTube client player API timedtext parser with strict English track selection."""
         proxy_candidates = YouTubeLoader.get_proxy_candidates()
         for p_cand in proxy_candidates:
             try:
@@ -384,7 +297,7 @@ Output ONLY valid JSON matching this schema:
                                         "timestamp_seconds": current_sec,
                                         "section_name": f"{video_title} @ {ts_str}",
                                         "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_sec)}s",
-                                        "tier": "Tier 2 (InnerTube API English Subtitles)"
+                                        "tier": "Tier 1 (InnerTube API English Subtitles)"
                                     })
                                     current_block = []
 
@@ -397,11 +310,98 @@ Output ONLY valid JSON matching this schema:
                                     "timestamp_seconds": current_sec,
                                     "section_name": f"{video_title} @ {ts_str}",
                                     "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_sec)}s",
-                                    "tier": "Tier 2 (InnerTube API English Subtitles)"
+                                    "tier": "Tier 1 (InnerTube API English Subtitles)"
                                 })
 
                             if segments:
                                 return segments
+            except Exception:
+                pass
+        return []
+
+    # ==========================================
+    # TIER 2: YouTubeTranscriptApi Subtitle Extraction (Strict English, 2-4s)
+    # ==========================================
+    @staticmethod
+    def extract_tier_2_transcript_api(url: str, video_id: str, video_title: str) -> List[Dict[str, Any]]:
+        """Tier 2: Verbatim English subtitle extraction using YouTubeTranscriptApi."""
+        from youtube_transcript_api import YouTubeTranscriptApi
+        proxy_candidates = YouTubeLoader.get_proxy_candidates()
+
+        for p_cand in proxy_candidates:
+            try:
+                ytt = YouTubeTranscriptApi()
+                t_list = ytt.list(video_id)
+                target_t = None
+                
+                # 1. Strictly look for manual English subtitles
+                try:
+                    target_t = t_list.find_transcript(['en', 'en-US', 'en-GB', 'en-CA', 'en-AU', 'en-IN'])
+                except Exception:
+                    pass
+                
+                # 2. Look for auto-generated English subtitles
+                if not target_t:
+                    try:
+                        target_t = t_list.find_generated_transcript(['en', 'en-US', 'en-GB', 'en-CA'])
+                    except Exception:
+                        pass
+                
+                # 3. Look for any English track
+                if not target_t:
+                    for t in t_list:
+                        if t.language_code.startswith('en'):
+                            target_t = t
+                            break
+                            
+                # 4. If only non-English is available, translate to English
+                if not target_t:
+                    for t in t_list:
+                        if t.is_translatable:
+                            target_t = t.translate('en')
+                            break
+
+                if target_t:
+                    snippets = target_t.fetch()
+                    segments = []
+                    current_block = []
+                    current_sec = 0.0
+
+                    for s in snippets:
+                        t_sec = float(getattr(s, 'start', 0.0) if hasattr(s, 'start') else s.get('start', 0.0))
+                        text = str(getattr(s, 'text', '') if hasattr(s, 'text') else s.get('text', '')).replace('\n', ' ').strip()
+                        if not text:
+                            continue
+                        if not current_block:
+                            current_sec = t_sec
+                        current_block.append(text)
+                        acc = " ".join(current_block)
+                        if len(acc) >= 350:
+                            ts_str = YouTubeLoader.format_timestamp(current_sec)
+                            segments.append({
+                                "text": acc,
+                                "timestamp": ts_str,
+                                "timestamp_seconds": current_sec,
+                                "section_name": f"{video_title} @ {ts_str}",
+                                "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_sec)}s",
+                                "tier": "Tier 2 (YouTubeTranscriptApi English)"
+                            })
+                            current_block = []
+
+                    if current_block:
+                        acc = " ".join(current_block)
+                        ts_str = YouTubeLoader.format_timestamp(current_sec)
+                        segments.append({
+                            "text": acc,
+                            "timestamp": ts_str,
+                            "timestamp_seconds": current_sec,
+                            "section_name": f"{video_title} @ {ts_str}",
+                            "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_sec)}s",
+                            "tier": "Tier 2 (YouTubeTranscriptApi English)"
+                        })
+
+                    if segments:
+                        return segments
             except Exception:
                 pass
         return []
@@ -565,19 +565,19 @@ Output ONLY valid JSON matching this schema:
 
         video_title, author, description, chapters = YouTubeLoader.fetch_video_metadata(url, video_id)
 
-        # 1. Tier 1: YouTubeTranscriptApi (Strict English, 2-3s)
+        # 1. Tier 1: Android InnerTube TimedText (Strict English, 1-2s, Bot-Immune)
         if progress_callback:
-            progress_callback("Extracting English transcript (Tier 1)...", 30)
-        segments = YouTubeLoader.extract_tier_1_transcript_api(url, video_id, video_title)
+            progress_callback("Extracting English transcript dialogue (Tier 1)...", 30)
+        segments = YouTubeLoader.extract_tier_1_innertube(url, video_id, video_title)
         if segments:
             if progress_callback:
                 progress_callback(f"Extracted {len(segments)} verbatim dialogue chunks in English (Tier 1)", 55)
             return segments, video_title, video_id
 
-        # 2. Tier 2: Android InnerTube TimedText (Strict English, 1-2s)
+        # 2. Tier 2: YouTubeTranscriptApi (Strict English, 2-3s)
         if progress_callback:
-            progress_callback("Extracting InnerTube timed subtitles (Tier 2)...", 35)
-        segments = YouTubeLoader.extract_tier_2_innertube(url, video_id, video_title)
+            progress_callback("Extracting English transcript via web gateway (Tier 2)...", 35)
+        segments = YouTubeLoader.extract_tier_2_transcript_api(url, video_id, video_title)
         if segments:
             if progress_callback:
                 progress_callback(f"Extracted {len(segments)} verbatim dialogue chunks in English (Tier 2)", 55)
