@@ -420,39 +420,49 @@ Output ONLY valid JSON matching this schema:
                     "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_start_sec)}s"
                 })
         else:
-            # 2. AI-powered multi-chapter knowledge synthesis fallback
-            ai_segments = YouTubeLoader.synthesize_video_knowledge_groq(video_title, author, video_id, description)
-            if ai_segments:
-                segments = ai_segments
-            elif description:
-                # 3. Description & Chapters Fallback
-                segments.append({
-                    "text": f"Video Title: {video_title}\nCreator / Channel: {author}\nLink: https://www.youtube.com/watch?v={video_id}\n\nComprehensive Video Overview & Summary:\n{description}",
-                    "timestamp": "00:00",
-                    "timestamp_seconds": 0.0,
-                    "section_name": f"{video_title} - Overview",
-                    "url": f"https://www.youtube.com/watch?v={video_id}"
-                })
+            # 2. Audio ASR Fallback: Transcribe audio stream with Groq Whisper-Large-V3
+            try:
+                from services.whisper_service import WhisperService
+                whisper_segs = WhisperService.transcribe_youtube_audio(url, video_title, video_id)
+                if whisper_segs and len(whisper_segs) > 0:
+                    segments = whisper_segs
+            except Exception as e:
+                print(f"[Groq Whisper ASR Fallback Error] {e}")
 
-                for ch in chapters:
-                    ch_ts = ch["timestamp"]
-                    ch_title = ch["title"]
-                    sec = YouTubeLoader.parse_timestamp_str_to_seconds(ch_ts)
+            if not segments:
+                # 3. AI-powered multi-chapter knowledge synthesis fallback
+                ai_segments = YouTubeLoader.synthesize_video_knowledge_groq(video_title, author, video_id, description)
+                if ai_segments:
+                    segments = ai_segments
+                elif description:
+                    # 3. Description & Chapters Fallback
                     segments.append({
-                        "text": f"Video: {video_title}\nChannel: {author}\nChapter Topic: {ch_title}\nTimestamp: {ch_ts}\n\nDiscussion Details: In this chapter of '{video_title}', {author} and guests explore {ch_title}.",
-                        "timestamp": ch_ts,
-                        "timestamp_seconds": sec,
-                        "section_name": f"{video_title} @ {ch_ts} ({ch_title})",
-                        "url": f"https://www.youtube.com/watch?v={video_id}&t={int(sec)}s"
+                        "text": f"Video Title: {video_title}\nCreator / Channel: {author}\nLink: https://www.youtube.com/watch?v={video_id}\n\nComprehensive Video Overview & Summary:\n{description}",
+                        "timestamp": "00:00",
+                        "timestamp_seconds": 0.0,
+                        "section_name": f"{video_title} - Overview",
+                        "url": f"https://www.youtube.com/watch?v={video_id}"
                     })
-            else:
-                segments.append({
-                    "text": f"Video Title: {video_title}\nCreator: {author}\nLink: https://www.youtube.com/watch?v={video_id}\n\nContent Notes: Comprehensive video presentation by {author} discussing {video_title} and technology developments.",
-                    "timestamp": "00:00",
-                    "timestamp_seconds": 0.0,
-                    "section_name": f"{video_title} - Video Summary",
-                    "url": f"https://www.youtube.com/watch?v={video_id}"
-                })
+
+                    for ch in chapters:
+                        ch_ts = ch["timestamp"]
+                        ch_title = ch["title"]
+                        sec = YouTubeLoader.parse_timestamp_str_to_seconds(ch_ts)
+                        segments.append({
+                            "text": f"Video: {video_title}\nChannel: {author}\nChapter Topic: {ch_title}\nTimestamp: {ch_ts}\n\nDiscussion Details: In this chapter of '{video_title}', {author} and guests explore {ch_title}.",
+                            "timestamp": ch_ts,
+                            "timestamp_seconds": sec,
+                            "section_name": f"{video_title} @ {ch_ts} ({ch_title})",
+                            "url": f"https://www.youtube.com/watch?v={video_id}&t={int(sec)}s"
+                        })
+                else:
+                    segments.append({
+                        "text": f"Video Title: {video_title}\nCreator: {author}\nLink: https://www.youtube.com/watch?v={video_id}\n\nContent Notes: Comprehensive video presentation by {author} discussing {video_title} and technology developments.",
+                        "timestamp": "00:00",
+                        "timestamp_seconds": 0.0,
+                        "section_name": f"{video_title} - Video Summary",
+                        "url": f"https://www.youtube.com/watch?v={video_id}"
+                    })
 
         return segments, video_title, video_id
 
