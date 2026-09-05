@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "../lib/router";
 import { useTheme } from "../lib/theme";
 import { Icon, cx } from "./ui";
-import { knowledgeBases } from "../lib/data";
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api/v1";
 
 type Command = { id: string; label: string; hint?: string; icon: Parameters<typeof Icon>[0]["name"]; group: string; run: () => void };
 
@@ -10,6 +11,7 @@ export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
+  const [liveKbs, setLiveKbs] = useState<Array<{ id: string; name: string; source_count?: number }>>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const { navigate } = useRouter();
   const { theme, toggle } = useTheme();
@@ -27,7 +29,23 @@ export function CommandPalette() {
   }, []);
 
   useEffect(() => {
-    if (open) { setQuery(""); setActive(0); setTimeout(() => inputRef.current?.focus(), 20); }
+    if (open) {
+      setQuery("");
+      setActive(0);
+      setTimeout(() => inputRef.current?.focus(), 20);
+
+      const token = localStorage.getItem("dm-token") || "";
+      if (token) {
+        fetch(`${API_BASE}/knowledge-bases/`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+          .then((res) => (res.ok ? res.json() : []))
+          .then((data) => {
+            if (Array.isArray(data)) setLiveKbs(data);
+          })
+          .catch(() => {});
+      }
+    }
   }, [open]);
 
   const commands = useMemo<Command[]>(() => {
@@ -40,8 +58,8 @@ export function CommandPalette() {
       { id: "eval", label: "Evaluation", icon: "chart", group: "Navigate", run: go("/advanced/evaluation") },
       { id: "set", label: "Settings", icon: "settings", group: "Navigate", run: go("/settings") },
     ];
-    const kbs: Command[] = knowledgeBases.map((kb) => ({
-      id: kb.id, label: kb.name, hint: `${kb.sources.length} sources`, icon: "library", group: "Knowledge bases",
+    const kbs: Command[] = liveKbs.map((kb) => ({
+      id: kb.id, label: kb.name, hint: `${kb.source_count || 0} sources`, icon: "library", group: "Knowledge bases",
       run: () => { navigate(`/knowledge-bases/${kb.id}/chat`); setOpen(false); },
     }));
     const actions: Command[] = [
@@ -49,7 +67,7 @@ export function CommandPalette() {
       { id: "logout", label: "Log out", icon: "logout", group: "Actions", run: go("/") },
     ];
     return [...nav, ...kbs, ...actions];
-  }, [navigate, theme, toggle]);
+  }, [navigate, theme, toggle, liveKbs]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();

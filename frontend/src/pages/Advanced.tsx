@@ -47,6 +47,10 @@ export function Playground() {
           </div>
           {loading ? (
             <div className="space-y-3">{[0, 1, 2].map((i) => <div key={i} className="h-28 animate-pulse rounded-2xl border border-border bg-surface" />)}</div>
+          ) : results.length === 0 ? (
+            <div className="rounded-2xl border border-border bg-panel p-8 text-center text-sm text-muted">
+              Select or type a document query to inspect retrieved chunks.
+            </div>
           ) : (
             <div className="space-y-3">
               {results.map((r, i) => (
@@ -71,10 +75,10 @@ const pipeline = [
   { title: "Original query", body: "difference between BM25 and vector search", tone: "neutral" },
   { title: "Query processing", body: "3 query variations generated (MultiQuery)", tone: "neutral", list: ["What distinguishes BM25 from dense retrieval?", "BM25 vs vector similarity search comparison", "Sparse keyword vs semantic embedding retrieval"] },
   { title: "Retrieval", body: "Query Fusion · Top K = 4 · threshold 0.70", tone: "neutral" },
-  { title: "Retrieved chunks", body: "4 passages from 3 sources", tone: "accent", list: ["Advanced RAG.pdf · p.23 · 0.912", "Course Notes.docx · §BM25 · 0.874", "RAG Introduction.pdf · p.11 · 0.803", "RAG Lecture 01 · 12:40 · 0.771"] },
+  { title: "Retrieved chunks", body: "4 passages from 3 sources", tone: "accent", list: ["Advanced RAG.pdf · p.23 · 0.912", "Course Notes.docx · §BM25 · 0.874", "RAG Introduction.pdf · p.11 · 0.803", "Research Summary.pdf · p.4 · 0.771"] },
   { title: "Fusion / ranking", body: "Reciprocal Rank Fusion across lexical + dense rankings", tone: "neutral" },
   { title: "Final context", body: "1,284 tokens assembled · 4 passages deduplicated", tone: "neutral" },
-  { title: "LLM", body: "Claude Sonnet 5 · temperature 0.2 · answer generated with 2 citations", tone: "accent" },
+  { title: "LLM", body: "Groq Llama 3.3-70B · temperature 0.2 · answer generated with citations", tone: "accent" },
 ];
 
 export function Inspector() {

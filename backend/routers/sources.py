@@ -4,7 +4,7 @@ from typing import List, Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, status
 
 try:
-    from backend.models import SourceResponse, YouTubeSourceCreate, SourceType, SourceStatus
+    from backend.models import SourceResponse, SourceType, SourceStatus
     from backend.database import (
         db_get_kb,
         db_create_source,
@@ -16,12 +16,11 @@ try:
     )
     from backend.routers.auth import get_current_user_id
     from backend.services.document_loader import DocumentLoader
-    from backend.services.youtube_loader import YouTubeLoader
     from backend.services.chunker import TextChunker
     from backend.services.vector_store import VectorStoreManager
     from backend.config import UPLOAD_DIR, SYSTEM_LIMITS
 except ModuleNotFoundError:
-    from models import SourceResponse, YouTubeSourceCreate, SourceType, SourceStatus
+    from models import SourceResponse, SourceType, SourceStatus
     from database import (
         db_get_kb,
         db_create_source,
@@ -33,7 +32,6 @@ except ModuleNotFoundError:
     )
     from routers.auth import get_current_user_id
     from services.document_loader import DocumentLoader
-    from services.youtube_loader import YouTubeLoader
     from services.chunker import TextChunker
     from services.vector_store import VectorStoreManager
     from config import UPLOAD_DIR, SYSTEM_LIMITS
@@ -248,173 +246,6 @@ async def upload_documents_stream(
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"}
     )
 
-@router.post("/youtube/stream")
-def add_youtube_source_stream(yt_in: YouTubeSourceCreate, current_user_id: str = Depends(get_current_user_id)):
-    from fastapi.responses import StreamingResponse
-    import json
-
-    def event_generator():
-        kb = db_get_kb(yt_in.kb_id, current_user_id)
-        if not kb:
-            from datetime import datetime
-            from database import get_db_connection
-            try:
-                conn = get_db_connection()
-                now = datetime.now().isoformat()
-                conn.execute(
-                    "INSERT OR IGNORE INTO knowledge_bases (id, user_id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    (yt_in.kb_id, current_user_id, "Knowledge Base", "", now, now)
-                )
-                conn.commit()
-                conn.close()
-            except Exception:
-                pass
-
-        yield f"data: {json.dumps({'stage': 'initializing', 'progress': 15, 'message': 'Connecting to YouTube & fetching video metadata...'})}\n\n"
-
-        video_id = YouTubeLoader.extract_video_id(yt_in.url) or "video"
-        video_title = f"YouTube Video ({video_id})"
-        segments = []
-
-        try:
-            if yt_in.client_transcript_text and len(yt_in.client_transcript_text.strip()) > 20:
-                yield f"data: {json.dumps({'stage': 'parsing_transcript', 'progress': 35, 'message': 'Parsing user-provided transcript with timestamp sync...'})}\n\n"
-                try:
-                    meta_title, _, _, _ = YouTubeLoader.fetch_video_metadata(yt_in.url, video_id)
-                    if meta_title:
-                        video_title = meta_title
-                except Exception:
-                    pass
-                segments = YouTubeLoader.parse_raw_transcript_text(yt_in.client_transcript_text, video_title, yt_in.url)
-            elif yt_in.client_transcript_segments and len(yt_in.client_transcript_segments) > 0:
-                try:
-                    meta_title, _, _, _ = YouTubeLoader.fetch_video_metadata(yt_in.url, video_id)
-                    if meta_title:
-                        video_title = meta_title
-                except Exception:
-                    pass
-                segments = yt_in.client_transcript_segments
-            else:
-                yield f"data: {json.dumps({'stage': 'extracting_subtitles', 'progress': 35, 'message': 'Extracting verbatim transcript dialogue via high-speed gateway...'})}\n\n"
-                segments, video_title, video_id = YouTubeLoader.load_transcript(yt_in.url)
-
-            yield f"data: {json.dumps({'stage': 'formatting_chunks', 'progress': 60, 'message': f'Successfully extracted {len(segments)} verbatim dialogue chunks.'})}\n\n"
-
-            source_record = db_create_source(
-                kb_id=yt_in.kb_id,
-                user_id=current_user_id,
-                name=video_title,
-                source_type=SourceType.YOUTUBE.value,
-                url=yt_in.url,
-                video_id=video_id
-            )
-            source_id = source_record["id"]
-            db_update_source_status(source_id, "processing")
-
-            yield f"data: {json.dumps({'stage': 'chunking_segments', 'progress': 75, 'message': f'Formatting {len(segments)} semantic chunks with playback links...'})}\n\n"
-            chunks = chunker.chunk_segments(
-                segments=segments,
-                source_id=source_id,
-                kb_id=yt_in.kb_id,
-                source_name=video_title,
-                source_type=SourceType.YOUTUBE.value
-            )
-
-            yield f"data: {json.dumps({'stage': 'indexing_vectors', 'progress': 90, 'message': f'Indexing {len(chunks)} dense vector embeddings into ChromaDB...'})}\n\n"
-            vector_store.add_chunks(kb_id=yt_in.kb_id, chunks=chunks)
-            db_update_source_status(source_id, "ready", chunk_count=len(chunks))
-
-            updated_source = db_get_source(source_id, current_user_id)
-            yield f"data: {json.dumps({'stage': 'complete', 'progress': 100, 'message': f'Ready! {len(chunks)} chunks indexed with second-accurate timestamps.', 'source': updated_source})}\n\n"
-
-        except Exception as e:
-            yield f"data: {json.dumps({'stage': 'error', 'progress': 100, 'message': f'Ingestion error: {str(e)}'})}\n\n"
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"}
-    )
-
-@router.post("/youtube", response_model=SourceResponse)
-def add_youtube_source(yt_in: YouTubeSourceCreate, current_user_id: str = Depends(get_current_user_id)):
-    kb = db_get_kb(yt_in.kb_id, current_user_id)
-    if not kb:
-        from datetime import datetime
-        from database import get_db_connection
-        try:
-            conn = get_db_connection()
-            now = datetime.now().isoformat()
-            conn.execute(
-                "INSERT OR IGNORE INTO knowledge_bases (id, user_id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (yt_in.kb_id, current_user_id, "Knowledge Base", "", now, now)
-            )
-            conn.commit()
-            conn.close()
-        except Exception:
-            pass
-
-    video_id = YouTubeLoader.extract_video_id(yt_in.url) or "video"
-    video_title = f"YouTube Video ({video_id})"
-    segments = []
-
-    # 1. Check if client provided verbatim transcript text or segments
-    if yt_in.client_transcript_text and len(yt_in.client_transcript_text.strip()) > 20:
-        try:
-            meta_title, _, _, _ = YouTubeLoader.fetch_video_metadata(yt_in.url, video_id)
-            if meta_title:
-                video_title = meta_title
-        except Exception:
-            pass
-        segments = YouTubeLoader.parse_raw_transcript_text(yt_in.client_transcript_text, video_title, yt_in.url)
-    elif yt_in.client_transcript_segments and len(yt_in.client_transcript_segments) > 0:
-        try:
-            meta_title, _, _, _ = YouTubeLoader.fetch_video_metadata(yt_in.url, video_id)
-            if meta_title:
-                video_title = meta_title
-        except Exception:
-            pass
-        segments = yt_in.client_transcript_segments
-    else:
-        # 2. Server-side extraction & Groq synthesis fallback
-        try:
-            segments, video_title, video_id = YouTubeLoader.load_transcript(yt_in.url)
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"YouTube Ingestion Error: {str(e)}"
-            )
-
-    source_record = db_create_source(
-        kb_id=yt_in.kb_id,
-        user_id=current_user_id,
-        name=video_title,
-        source_type=SourceType.YOUTUBE.value,
-        url=yt_in.url,
-        video_id=video_id
-    )
-    source_id = source_record["id"]
-
-    try:
-        db_update_source_status(source_id, "processing")
-        chunks = chunker.chunk_segments(
-            segments=segments,
-            source_id=source_id,
-            kb_id=yt_in.kb_id,
-            source_name=video_title,
-            source_type=SourceType.YOUTUBE.value
-        )
-        vector_store.add_chunks(kb_id=yt_in.kb_id, chunks=chunks)
-        db_update_source_status(source_id, "ready", chunk_count=len(chunks))
-        updated_source = db_get_source(source_id, current_user_id)
-        return SourceResponse(**updated_source)
-
-    except Exception as e:
-        db_update_source_status(source_id, "failed", error_message=str(e))
-        failed_source = db_get_source(source_id, current_user_id)
-        return SourceResponse(**failed_source)
-
-
 @router.get("/{source_id}/preview")
 def get_source_preview(source_id: str, current_user_id: str = Depends(get_current_user_id)):
     source = db_get_source(source_id, current_user_id)
@@ -426,17 +257,12 @@ def get_source_preview(source_id: str, current_user_id: str = Depends(get_curren
     
     src_chunks = sorted(src_chunks, key=lambda x: x.get("metadata", {}).get("chunk_index", 0))
     preview_text = "\n\n".join([c["content"] for c in src_chunks[:6]]) if src_chunks else "Document processed and indexed into vector database."
-    
-    tier_used = None
-    if src_chunks:
-        tier_used = src_chunks[0].get("metadata", {}).get("tier")
 
     return {
         "source_id": source_id,
         "name": source["name"],
         "chunk_count": len(src_chunks) or source.get("chunk_count", 0),
-        "page_count": source.get("page_count") if source["source_type"] != "youtube" else None,
-        "tier": tier_used,
+        "page_count": source.get("page_count"),
         "preview_text": preview_text,
         "chunks": [{"id": c["id"], "content": c["content"], "metadata": c.get("metadata", {})} for c in src_chunks[:10]]
     }

@@ -528,7 +528,6 @@ function SourceRowSkeleton() {
 }
 
 function SourcesView({ kb, onSourcesChanged }: { kb: KnowledgeBase; onSourcesChanged?: () => void }) {
-  const [filter, setFilter] = useState<"all" | "documents" | "youtube">("all");
   const [q, setQ] = useState("");
   const [add, setAdd] = useState(false);
   const [sources, setSources] = useState<Source[]>(kb.sources || []);
@@ -556,32 +555,27 @@ function SourcesView({ kb, onSourcesChanged }: { kb: KnowledgeBase; onSourcesCha
   };
 
   const list = (sources || []).filter((s) => {
-    const mf = filter === "all" || (filter === "youtube" ? s.type === "youtube" : s.type !== "youtube");
-    return mf && s.name.toLowerCase().includes(q.toLowerCase());
+    return s.name.toLowerCase().includes(q.toLowerCase());
   });
 
   return (
     <div className="w-full px-6 py-6 sm:px-8">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="w-full sm:max-w-xs"><SearchInput placeholder="Search sources…" value={q} onChange={(e) => setQ(e.target.value)} /></div>
-        <div className="flex gap-1 rounded-lg border border-border bg-panel p-1">
-          {(["all", "documents", "youtube"] as const).map((f) => (
-            <button key={f} onClick={() => setFilter(f)} className={cx("rounded-md px-3 py-1.5 text-[13px] font-medium capitalize transition-colors", filter === f ? "bg-accent-soft text-accent" : "text-muted hover:text-foreground")}>{f}</button>
-          ))}
-        </div>
+        <div className="w-full sm:max-w-xs"><SearchInput placeholder="Search documents…" value={q} onChange={(e) => setQ(e.target.value)} /></div>
+        <Button icon="plus" size="sm" onClick={() => setAdd(true)}>Upload document</Button>
       </div>
 
       <div className="mt-5">
         {!loaded ? (
           <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-panel">{[0, 1, 2, 3].map((i) => <SourceRowSkeleton key={i} />)}</div>
         ) : list.length === 0 && sources.length === 0 ? (
-          <EmptyState icon="sources" title="No sources yet" description="Add documents or YouTube videos to start asking questions." action={<Button icon="plus" onClick={() => setAdd(true)}>Add source</Button>} />
+          <EmptyState icon="sources" title="No documents yet" description="Upload PDF, DOCX, TXT, Markdown, CSV, or XLSX files to start asking questions." action={<Button icon="plus" onClick={() => setAdd(true)}>Add document</Button>} />
         ) : list.length === 0 ? (
           <EmptyState
             icon="search"
-            title="No sources match your filters"
-            description={q ? `No sources match "${q}"${filter !== "all" ? ` in ${filter}` : ""}.` : `No ${filter} sources in this knowledge base.`}
-            action={<Button variant="secondary" icon="close" onClick={() => { setQ(""); setFilter("all"); }}>Clear filters</Button>}
+            title="No documents match your search"
+            description={`No indexed documents match "${q}".`}
+            action={<Button variant="secondary" icon="close" onClick={() => setQ("")}>Clear search</Button>}
           />
         ) : (
           <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-panel">
@@ -601,9 +595,9 @@ function SourcesView({ kb, onSourcesChanged }: { kb: KnowledgeBase; onSourcesCha
         open={!!pending}
         onClose={() => setPending(null)}
         onConfirm={() => { if (pending) removeSource(pending); }}
-        title="Delete source?"
+        title="Delete document?"
         description={pending ? `"${pending.name}" will be removed from ${kb.name}, along with its indexed chunks. You can undo this right after.` : ""}
-        confirmLabel="Delete source"
+        confirmLabel="Delete document"
       />
     </div>
   );
@@ -639,24 +633,16 @@ function SourceDetails({ kb, source }: { kb: KnowledgeBase; source: Source }) {
       .catch(() => {});
   }, [source.id]);
 
-  const isYt = source.type === "youtube";
-  const displayPages = previewData?.page_count ?? source.pages ?? (isYt ? null : 1);
+  const displayPages = previewData?.page_count ?? source.pages ?? 1;
   const displayChunks = previewData?.chunk_count ?? source.chunks ?? 0;
 
-  const facts = isYt
-    ? [
-        ["Type", "YouTube video"],
-        ["Engine", previewData?.tier ? previewData.tier.split("(")[0].trim() : "Tier 1 (Fast Gateway)"],
-        ["Chunks", displayChunks > 0 ? `${displayChunks} chunks` : "—"],
-        ["Transcript", source.status === "ready" ? "Indexed (100% Verbatim)" : "Pending"],
-        ["Added", source.added],
-      ]
-    : [
-        ["Type", source.type.toUpperCase()],
-        ["Pages", displayPages ? `${displayPages} pages` : "—"],
-        ["Chunks", displayChunks > 0 ? `${displayChunks} chunks` : "—"],
-        ["Added", source.added],
-      ];
+  const facts = [
+    ["Type", source.type.toUpperCase()],
+    ["Pages", displayPages ? `${displayPages} pages` : "—"],
+    ["Chunks", displayChunks > 0 ? `${displayChunks} chunks` : "—"],
+    ["Status", source.status === "ready" ? "Indexed & Ready" : source.status],
+    ["Added", source.added],
+  ];
 
   return (
     <div className="w-full max-w-5xl px-6 py-8 sm:px-8">
@@ -668,20 +654,20 @@ function SourceDetails({ kb, source }: { kb: KnowledgeBase; source: Source }) {
             <div className="mt-2"><StatusBadge status={source.status} /></div>
           </div>
         </div>
-        <Button variant="destructive" size="sm" icon="trash" onClick={() => setConfirm(true)}>Delete source</Button>
+        <Button variant="destructive" size="sm" icon="trash" onClick={() => setConfirm(true)}>Delete document</Button>
       </div>
       <ConfirmDialog
         open={confirm}
         onClose={() => setConfirm(false)}
-        onConfirm={() => { toast("Source deleted", "error"); navigate(`/knowledge-bases/${kb.id}/sources`); }}
-        title="Delete source?"
+        onConfirm={() => { toast("Document deleted", "error"); navigate(`/knowledge-bases/${kb.id}/sources`); }}
+        title="Delete document?"
         description={`"${source.name}" will be permanently removed from ${kb.name}, along with its indexed chunks. This cannot be undone.`}
-        confirmLabel="Delete source"
+        confirmLabel="Delete document"
       />
 
       <div className="mt-8 grid gap-6 lg:grid-cols-[1.4fr_1fr]">
         <div className="rounded-2xl border border-border bg-panel p-4 sm:p-5">
-          <h2 className="text-sm font-semibold">{isYt ? "Transcript preview" : "Document preview"}</h2>
+          <h2 className="text-sm font-semibold">Document preview</h2>
           {loc && (
             <div ref={highlightRef} className="dm-fade-up mt-3 flex items-start gap-2.5 rounded-xl border border-accent/30 bg-accent-soft px-4 py-3 ring-2 ring-accent/15">
               <Icon name="quote" className="mt-0.5 size-4 shrink-0 text-accent" />
@@ -704,7 +690,7 @@ function SourceDetails({ kb, source }: { kb: KnowledgeBase; source: Source }) {
                   {previewData.preview_text}
                 </div>
               ) : (
-                <p className="text-muted text-sm">{isYt ? "Loading video transcript from vector index..." : "Loading document preview from vector index..."}</p>
+                <p className="text-muted text-sm">Loading document preview from vector index...</p>
               )}
             </div>
           )}
@@ -721,12 +707,6 @@ function SourceDetails({ kb, source }: { kb: KnowledgeBase; source: Source }) {
               ))}
             </dl>
           </div>
-          {isYt && source.url && (
-            <div className="rounded-2xl border border-border bg-panel p-4 sm:p-5">
-              <h2 className="text-sm font-semibold">Source URL</h2>
-              <a href={source.url} target="_blank" rel="noreferrer" className="mt-2 flex items-center gap-1.5 break-all text-[13px] text-accent hover:underline">{source.url}<Icon name="external" className="size-3.5 shrink-0" /></a>
-            </div>
-          )}
         </div>
       </div>
     </div>

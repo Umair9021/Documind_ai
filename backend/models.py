@@ -82,14 +82,7 @@ class SourceCreate(BaseModel):
     kb_id: str
     name: str
     source_type: SourceType
-    url: Optional[str] = None
-    video_id: Optional[str] = None
-
-class YouTubeSourceCreate(BaseModel):
-    kb_id: str
-    url: str
-    client_transcript_text: Optional[str] = None
-    client_transcript_segments: Optional[List[Dict[str, Any]]] = None
+    file_size_bytes: int = 0
 
 class SourceResponse(BaseModel):
     id: str
