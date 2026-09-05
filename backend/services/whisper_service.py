@@ -85,7 +85,7 @@ class WhisperService:
         out_template = os.path.join(temp_dir, f"dm_yt_{video_id}_%(id)s.%(ext)s")
 
         ydl_opts = {
-            'format': 'ba[ext=m4a]/ba/worstaudio/worst',
+            'format': '249/ba[abr<=48]/ba[ext=m4a]/worstaudio/worst',
             'outtmpl': out_template,
             'quiet': True,
             'no_warnings': True,
@@ -100,8 +100,7 @@ class WhisperService:
 
             if downloaded_file and os.path.exists(downloaded_file):
                 file_size_mb = os.path.getsize(downloaded_file) / (1024 * 1024)
-                # Only send if under Groq 25 MB limit
-                if file_size_mb <= 24.5:
+                if file_size_mb <= 25.0:
                     segments = WhisperService.transcribe_audio_file(downloaded_file)
                     if segments:
                         for seg in segments:
