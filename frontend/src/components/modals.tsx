@@ -224,22 +224,23 @@ async function fetchClientYouTubeCaptions(url: string): Promise<any[] | null> {
     if (!match) return null;
     const videoId = match[1];
 
+    const targetUrl = `https://www.youtube.com/watch?v=${videoId}`;
     const proxyUrls = [
-      `https://corsproxy.io/?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}`,
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}`,
-      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}`,
+      `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`,
     ];
 
     let html = "";
     for (const proxy of proxyUrls) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 4500);
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
         const res = await fetch(proxy, { signal: controller.signal });
         clearTimeout(timeoutId);
         if (res.ok) {
           html = await res.text();
-          if (html.includes("captionTracks")) break;
+          if (html.includes("captionTracks") || html.includes("timedtext")) break;
         }
       } catch {
         continue;
@@ -270,7 +271,7 @@ async function fetchClientYouTubeCaptions(url: string): Promise<any[] | null> {
     // 2. Fallback to corsproxy.io
     if (!xmlText) {
       try {
-        const cpRes = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(captionUrl)}`);
+        const cpRes = await fetch(`https://corsproxy.io/?${encodeURIComponent(captionUrl)}`);
         if (cpRes.ok) {
           xmlText = await cpRes.text();
         }
