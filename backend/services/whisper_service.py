@@ -65,7 +65,8 @@ class WhisperService:
                 transcription = client.audio.transcriptions.create(
                     file=(os.path.basename(target_path), f.read()),
                     model="whisper-large-v3-turbo",
-                    response_format="verbose_json"
+                    response_format="verbose_json",
+                    language="en"
                 )
 
             segments: List[Dict[str, Any]] = []

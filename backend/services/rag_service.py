@@ -72,11 +72,12 @@ class RAGService:
 
         if GROQ_API_KEY:
             models_to_try = [
-                "qwen/qwen3.8-27b",
                 "openai/gpt-oss-120b",
                 "openai/gpt-oss-20b",
                 "groq/compound",
-                "qwen/qwen3.6-27b"
+                "llama-3.3-70b-versatile",
+                "llama-3.1-8b-instant",
+                "qwen/qwen3.8-27b"
             ]
 
             if self.groq_client:
