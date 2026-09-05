@@ -80,6 +80,11 @@ _DEFAULT_OR_KEY = base64.b64decode("c2stb3ItdjEtNGFiMzRiOWM5M2MxMDk4OTA3ZTg4ZjE4
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", _DEFAULT_OR_KEY)
 OPENROUTER_EMBEDDING_MODEL = os.getenv("OPENROUTER_EMBEDDING_MODEL", "nvidia/nemotron-3-embed-1b:free")
 
+# Proxy Pool Configuration (Webshare Residential / Datacenter Proxies)
+PROXY_URL = os.getenv("PROXY_URL", "http://qaxlrzux:r9pcj6x9c8la@31.59.20.176:6754")
+PROXY_ROTATING_URL = os.getenv("PROXY_ROTATING_URL", "http://qaxlrzux-rotate:r9pcj6x9c8la@p.webshare.io:80")
+
 # Ollama (Optional)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL_ID = os.getenv("OLLAMA_MODEL_ID", "llama3")
+

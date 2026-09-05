@@ -127,41 +127,62 @@ class WhisperService:
                     pass
 
     @staticmethod
-    def transcribe_youtube_audio(url: str, video_title: str = "YouTube Video", video_id: str = "") -> Optional[List[Dict[str, Any]]]:
+    def transcribe_youtube_audio(url: str, video_title: str = "YouTube Video", video_id: str = "", proxy: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         """Download YouTube audio stream, compress if needed, and transcribe using Groq Whisper."""
-        temp_dir = tempfile.gettempdir()
-        out_template = os.path.join(temp_dir, f"dm_yt_{video_id}_%(id)s.%(ext)s")
-
-        ydl_opts = {
-            'format': '249/ba[abr<=48]/ba[ext=m4a]/worstaudio/worst',
-            'outtmpl': out_template,
-            'quiet': True,
-            'no_warnings': True,
-            'noplaylist': True,
-        }
-
-        downloaded_file = None
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                downloaded_file = ydl.prepare_filename(info)
+            from config import PROXY_URL
+        except Exception:
+            PROXY_URL = os.getenv("PROXY_URL", "")
 
-            if downloaded_file and os.path.exists(downloaded_file):
-                segments = WhisperService.transcribe_audio_file(downloaded_file)
-                if segments:
-                    for seg in segments:
-                        sec = seg.get("timestamp_seconds", 0.0)
-                        seg["section_name"] = f"{video_title} @ {seg['timestamp']}"
-                        if video_id:
-                            seg["url"] = f"https://www.youtube.com/watch?v={video_id}&t={int(sec)}s"
-                    return segments
-        except Exception as e:
-            print(f"[YouTube Audio Whisper Error] {e}")
-        finally:
-            if downloaded_file and os.path.exists(downloaded_file):
-                try:
-                    os.remove(downloaded_file)
-                except Exception:
-                    pass
+        proxy_candidates = []
+        if proxy:
+            proxy_candidates.append(proxy)
+        if PROXY_URL and PROXY_URL not in proxy_candidates:
+            proxy_candidates.append(PROXY_URL)
+        proxy_candidates.extend([
+            "http://qaxlrzux:r9pcj6x9c8la@191.96.254.138:6185",
+            "http://qaxlrzux:r9pcj6x9c8la@31.59.20.176:6754",
+            None
+        ])
+
+        temp_dir = tempfile.gettempdir()
+        downloaded_file = None
+
+        for p_cand in proxy_candidates:
+            out_template = os.path.join(temp_dir, f"dm_yt_{video_id}_%(id)s.%(ext)s")
+            ydl_opts = {
+                'format': '249/ba[abr<=48]/ba[ext=m4a]/worstaudio/worst',
+                'outtmpl': out_template,
+                'quiet': True,
+                'no_warnings': True,
+                'noplaylist': True,
+            }
+            if p_cand:
+                ydl_opts['proxy'] = p_cand
+
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    downloaded_file = ydl.prepare_filename(info)
+
+                if downloaded_file and os.path.exists(downloaded_file) and os.path.getsize(downloaded_file) > 1024:
+                    segments = WhisperService.transcribe_audio_file(downloaded_file)
+                    if segments:
+                        for seg in segments:
+                            sec = seg.get("timestamp_seconds", 0.0)
+                            seg["section_name"] = f"{video_title} @ {seg['timestamp']}"
+                            if video_id:
+                                seg["url"] = f"https://www.youtube.com/watch?v={video_id}&t={int(sec)}s"
+                        return segments
+            except Exception as e:
+                print(f"[YouTube Audio Download Error with {p_cand}]: {e}")
+            finally:
+                if downloaded_file and os.path.exists(downloaded_file):
+                    try:
+                        os.remove(downloaded_file)
+                    except Exception:
+                        pass
+                downloaded_file = None
 
         return None
+
