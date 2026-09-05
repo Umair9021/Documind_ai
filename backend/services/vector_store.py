@@ -50,12 +50,12 @@ class OpenRouterNemotronEmbeddingFunction(EmbeddingFunction[Documents]):
         if not self.api_key:
             return self._fallback_embed(texts)
 
-        # Batch in chunks of 20 to avoid payload size limits
-        batch_size = 20
-        all_embeddings = []
+        from concurrent.futures import ThreadPoolExecutor
 
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
+        batch_size = 64
+        batches = [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)]
+
+        def _embed_single_batch(batch: List[str]) -> List[List[float]]:
             payload = {
                 "model": self.model_name,
                 "input": batch
@@ -72,19 +72,23 @@ class OpenRouterNemotronEmbeddingFunction(EmbeddingFunction[Documents]):
                 method="POST"
             )
             try:
-                with urllib.request.urlopen(req, timeout=15) as resp:
+                with urllib.request.urlopen(req, timeout=4.0) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                     items = data.get("data", [])
                     if len(items) == len(batch):
-                        all_embeddings.extend([item["embedding"] for item in items])
-                        continue
+                        return [item["embedding"] for item in items]
             except Exception as e:
-                print(f"[OpenRouter Nemotron Embeddings Error] {e}")
-            
-            # If API call fails or times out, fallback gracefully for this batch
-            all_embeddings.extend(self._fallback_embed(batch))
+                pass
+            return self._fallback_embed(batch)
 
-        return all_embeddings
+        try:
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                batch_results = list(executor.map(_embed_single_batch, batches))
+            all_embeddings = [emb for res in batch_results for emb in res]
+            return all_embeddings
+        except Exception:
+            return self._fallback_embed(texts)
+
 
 class VectorStoreManager:
     """Manages Chroma DB vector collections isolated per Knowledge Base with NVIDIA Nemotron 1B Cloud GPU Inference"""

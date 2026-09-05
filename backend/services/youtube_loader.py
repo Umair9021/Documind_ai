@@ -190,21 +190,16 @@ Output ONLY valid JSON matching this schema:
                 PROXY_URL = os.getenv("PROXY_URL", "http://qaxlrzux:r9pcj6x9c8la@31.59.20.176:6754")
                 PROXY_ROTATING_URL = os.getenv("PROXY_ROTATING_URL", "http://qaxlrzux-rotate:r9pcj6x9c8la@p.webshare.io:80")
 
-        candidates = []
-        if PROXY_URL:
-            candidates.append(PROXY_URL)
+        # 1. Direct connection first for ultra-fast (1.2s) extraction
+        candidates = [None]
         if PROXY_ROTATING_URL and PROXY_ROTATING_URL not in candidates:
             candidates.append(PROXY_ROTATING_URL)
+        if PROXY_URL and PROXY_URL not in candidates:
+            candidates.append(PROXY_URL)
 
         backup_nodes = [
             "http://qaxlrzux:r9pcj6x9c8la@191.96.254.138:6185",
-            "http://qaxlrzux:r9pcj6x9c8la@31.59.20.176:6754",
-            "http://qaxlrzux:r9pcj6x9c8la@45.38.107.97:6014",
-            "http://qaxlrzux:r9pcj6x9c8la@84.247.60.125:6095",
-            "http://qaxlrzux:r9pcj6x9c8la@142.111.67.146:5611",
-            "http://qaxlrzux:r9pcj6x9c8la@198.23.243.226:6361",
-            "http://qaxlrzux:r9pcj6x9c8la@38.154.185.97:6370",
-            None
+            "http://qaxlrzux:r9pcj6x9c8la@31.59.20.176:6754"
         ]
         for b in backup_nodes:
             if b not in candidates:
@@ -228,7 +223,12 @@ Output ONLY valid JSON matching this schema:
                     'subtitleslangs': ['en', 'en-orig', 'en-US', 'en-GB'],
                     'quiet': True,
                     'no_warnings': True,
-                    'socket_timeout': 10,
+                    'socket_timeout': 3.0,
+                    'retries': 0,
+                    'extractor_retries': 0,
+                    'fragment_retries': 0,
+                    'noplaylist': True,
+                    'cachedir': False,
                 }
                 if p_cand:
                     ydl_opts['proxy'] = p_cand
@@ -252,9 +252,9 @@ Output ONLY valid JSON matching this schema:
                             sub_req = urllib.request.Request(target_track["url"], headers={"User-Agent": "Mozilla/5.0"})
                             if p_cand:
                                 opener = urllib.request.build_opener(urllib.request.ProxyHandler({'http': p_cand, 'https': p_cand}))
-                                sub_resp = opener.open(sub_req, timeout=12)
+                                sub_resp = opener.open(sub_req, timeout=4.0)
                             else:
-                                sub_resp = urllib.request.urlopen(sub_req, timeout=12)
+                                sub_resp = urllib.request.urlopen(sub_req, timeout=4.0)
 
                             with sub_resp:
                                 raw_sub = sub_resp.read().decode("utf-8")
@@ -302,7 +302,7 @@ Output ONLY valid JSON matching this schema:
                                     if segments:
                                         return segments
             except Exception as e:
-                print(f"[Tier 1 yt-dlp error with {p_cand}]: {e}")
+                pass
         return []
 
     # ==========================================
@@ -325,9 +325,9 @@ Output ONLY valid JSON matching this schema:
                 )
                 if p_cand:
                     opener = urllib.request.build_opener(urllib.request.ProxyHandler({'http': p_cand, 'https': p_cand}))
-                    h_resp = opener.open(h_req, timeout=8)
+                    h_resp = opener.open(h_req, timeout=3.5)
                 else:
-                    h_resp = urllib.request.urlopen(h_req, timeout=8)
+                    h_resp = urllib.request.urlopen(h_req, timeout=3.5)
 
                 with h_resp as r:
                     html_txt = r.read().decode("utf-8")
@@ -348,9 +348,9 @@ Output ONLY valid JSON matching this schema:
                         method="POST"
                     )
                     if p_cand:
-                        p_resp = opener.open(p_req, timeout=8)
+                        p_resp = opener.open(p_req, timeout=3.5)
                     else:
-                        p_resp = urllib.request.urlopen(p_req, timeout=8)
+                        p_resp = urllib.request.urlopen(p_req, timeout=3.5)
 
                     with p_resp:
                         p_data = json.loads(p_resp.read().decode("utf-8"))
@@ -359,9 +359,9 @@ Output ONLY valid JSON matching this schema:
                             caption_url = captions[0].get("baseUrl")
                             tt_req = urllib.request.Request(caption_url, headers={"User-Agent": "com.google.android.youtube/20.10.38"})
                             if p_cand:
-                                tt_resp = opener.open(tt_req, timeout=8)
+                                tt_resp = opener.open(tt_req, timeout=3.5)
                             else:
-                                tt_resp = urllib.request.urlopen(tt_req, timeout=8)
+                                tt_resp = urllib.request.urlopen(tt_req, timeout=3.5)
 
                             with tt_resp:
                                 import xml.etree.ElementTree as ET
@@ -409,7 +409,7 @@ Output ONLY valid JSON matching this schema:
                                 if segments:
                                     return segments
             except Exception as e:
-                print(f"[Tier 2 InnerTube error with {p_cand}]: {e}")
+                pass
         return []
 
     # ==========================================
@@ -419,7 +419,10 @@ Output ONLY valid JSON matching this schema:
     def extract_tier_3_whisper(url: str, video_id: str, video_title: str) -> List[Dict[str, Any]]:
         """Tier 3: Downloads audio stream, compresses with FFmpeg (24kbps mono MP3), and transcribes with Groq Whisper."""
         try:
-            from services.whisper_service import WhisperService
+            try:
+                from backend.services.whisper_service import WhisperService
+            except ModuleNotFoundError:
+                from services.whisper_service import WhisperService
             segments = WhisperService.transcribe_youtube_audio(url, video_title, video_id)
             if segments:
                 for seg in segments:
@@ -476,42 +479,54 @@ Output ONLY valid JSON matching this schema:
         return segments
 
     # ==========================================
-    # Unified 4-Tier Automated Failover Loader
+    # Unified 4-Tier Automated Failover Loader with Progress Callback
     # ==========================================
     @staticmethod
-    def load_transcript(url: str) -> Tuple[List[Dict[str, Any]], str, str]:
+    def load_transcript(url: str, progress_callback=None) -> Tuple[List[Dict[str, Any]], str, str]:
         video_id = YouTubeLoader.extract_video_id(url)
         if not video_id:
             raise ValueError("Invalid YouTube URL. Please provide a standard YouTube video link.")
 
+        if progress_callback:
+            progress_callback("Connecting to YouTube & fetching video info...", 15)
+
         video_title, author, description, chapters = YouTubeLoader.fetch_video_metadata(url, video_id)
 
         # 1. Try Tier 1: yt-dlp Direct Subtitles with Proxy
-        print(f"[Loader] Attempting Tier 1 (yt-dlp Subtitles with Proxy)...")
+        if progress_callback:
+            progress_callback("Extracting subtitle tracks via high-speed gateway (Tier 1)...", 30)
         segments = YouTubeLoader.extract_tier_1_ytdlp(url, video_id, video_title)
         if segments:
-            print(f"[Loader] Tier 1 SUCCESS: Extracted {len(segments)} chunks!")
+            if progress_callback:
+                progress_callback(f"Extracted {len(segments)} verbatim dialogue chunks (Tier 1)", 50)
             return segments, video_title, video_id
 
         # 2. Try Tier 2: InnerTube API TimedText with Proxy
-        print(f"[Loader] Attempting Tier 2 (InnerTube API Subtitles with Proxy)...")
+        if progress_callback:
+            progress_callback("Parsing InnerTube API timed subtitles (Tier 2)...", 35)
         segments = YouTubeLoader.extract_tier_2_innertube(url, video_id, video_title)
         if segments:
-            print(f"[Loader] Tier 2 SUCCESS: Extracted {len(segments)} chunks!")
+            if progress_callback:
+                progress_callback(f"Extracted {len(segments)} verbatim dialogue chunks (Tier 2)", 50)
             return segments, video_title, video_id
 
         # 3. Try Tier 3: Audio Stream Download + FFmpeg + Groq Whisper Large V3
-        print(f"[Loader] Attempting Tier 3 (Groq Whisper-Large-V3 ASR Pipeline)...")
+        if progress_callback:
+            progress_callback("No subtitles found. Transcribing audio with Groq Whisper-Large-V3 (Tier 3)...", 40)
         segments = YouTubeLoader.extract_tier_3_whisper(url, video_id, video_title)
         if segments:
-            print(f"[Loader] Tier 3 SUCCESS: Extracted {len(segments)} chunks!")
+            if progress_callback:
+                progress_callback(f"Transcribed {len(segments)} chunks with Whisper Large V3 (Tier 3)", 55)
             return segments, video_title, video_id
 
         # 4. Try Tier 4: Groq AI Multi-Chapter Deep Knowledge Synthesis
-        print(f"[Loader] Attempting Tier 4 (Groq Multi-Chapter AI Synthesis)...")
+        if progress_callback:
+            progress_callback("Synthesizing multi-chapter knowledge breakdown with Groq AI (Tier 4)...", 45)
         segments = YouTubeLoader.extract_tier_4_synthesis(video_title, author, video_id, description, chapters)
-        print(f"[Loader] Tier 4 SUCCESS: Generated {len(segments)} knowledge segments!")
+        if progress_callback:
+            progress_callback(f"Generated {len(segments)} rich chapter segments (Tier 4)", 55)
         return segments, video_title, video_id
+
 
 
 

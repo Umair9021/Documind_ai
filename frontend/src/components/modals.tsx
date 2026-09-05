@@ -146,23 +146,6 @@ export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean
 
     setRows((r) => [...initialRows, ...r]);
 
-    // Simulated animated progress stages while backend processes
-    const pInterval = setInterval(() => {
-      setRows((prev) =>
-        prev.map((item) => {
-          if (item.status !== "processing") return item;
-          if (item.progress < 35) {
-            return { ...item, progress: 35, stageText: "Extracting text & pages..." };
-          } else if (item.progress < 65) {
-            return { ...item, progress: 65, stageText: "Chunking context segments..." };
-          } else if (item.progress < 88) {
-            return { ...item, progress: 88, stageText: "Indexing dense vectors & ChromaDB..." };
-          }
-          return item;
-        })
-      );
-    }, 600);
-
     if (kbId) {
       const token = localStorage.getItem("dm-token") || "";
       const formData = new FormData();
@@ -170,47 +153,90 @@ export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean
       fileList.forEach((f) => formData.append("files", f));
 
       try {
-        const res = await fetch(`${API_BASE}/sources/upload`, {
+        const res = await fetch(`${API_BASE}/sources/upload/stream`, {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
           body: formData,
         });
 
-        clearInterval(pInterval);
-
-        if (res.ok) {
-          setRows((prev) =>
-            prev.map((item) =>
-              fileList.some((f) => f.name === item.name)
-                ? { ...item, status: "ready", stageText: "Ready & indexed in ChromaDB", progress: 100 }
-                : item
-            )
-          );
-          toast(`Indexed ${files.length} document(s) successfully!`);
-          onAdded?.();
-        } else {
+        if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          setRows((prev) =>
-            prev.map((item) =>
-              fileList.some((f) => f.name === item.name)
-                ? { ...item, status: "failed", stageText: err.detail || "Upload error", progress: 100 }
-                : item
-            )
-          );
-          toast(err.detail || `Upload error: ${res.statusText}`, "error");
+          throw new Error(err.detail || `Upload failed (${res.status})`);
+        }
+
+        const reader = res.body?.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (trimmed.startsWith("data: ")) {
+                try {
+                  const eventData = JSON.parse(trimmed.slice(6));
+                  const targetFileName = eventData.fileName;
+                  if (eventData.stage === "error") {
+                    setRows((prev) =>
+                      prev.map((item) =>
+                        !targetFileName || item.name === targetFileName
+                          ? { ...item, status: "failed", stageText: eventData.message, progress: 100 }
+                          : item
+                      )
+                    );
+                    toast(eventData.message, "error");
+                  } else if (eventData.stage === "complete") {
+                    setRows((prev) =>
+                      prev.map((item) =>
+                        !targetFileName || item.name === targetFileName
+                          ? {
+                              ...item,
+                              status: "ready",
+                              stageText: eventData.message,
+                              progress: 100,
+                            }
+                          : item
+                      )
+                    );
+                    toast(`Indexed ${targetFileName || "file"} successfully!`);
+                    onAdded?.();
+                  } else {
+                    setRows((prev) =>
+                      prev.map((item) =>
+                        !targetFileName || item.name === targetFileName
+                          ? {
+                              ...item,
+                              stageText: eventData.message || item.stageText,
+                              progress: eventData.progress !== undefined ? eventData.progress : item.progress,
+                            }
+                          : item
+                      )
+                    );
+                  }
+                } catch (e) {}
+              }
+            }
+          }
         }
       } catch (err: any) {
-        clearInterval(pInterval);
         setRows((prev) =>
-          prev.map((item) => ({ ...item, status: "failed", stageText: "Network connection error", progress: 100 }))
+          prev.map((item) =>
+            fileList.some((f) => f.name === item.name)
+              ? { ...item, status: "failed", stageText: err.message || "Network connection error", progress: 100 }
+              : item
+          )
         );
-        toast("Network error during document upload", "error");
+        toast(err.message || "Network error during document upload", "error");
       } finally {
         setUploading(false);
       }
     } else {
       setTimeout(() => {
-        clearInterval(pInterval);
         setRows((r) => r.map((item) => ({ ...item, status: "ready", stageText: "Ready", progress: 100 })));
         toast(`Uploaded ${files.length} file(s)`);
         setUploading(false);
@@ -230,28 +256,12 @@ export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean
       name: currentUrl.includes("v=") ? `YouTube Video (${currentUrl.split("v=")[1]?.slice(0, 8)})` : "YouTube Lecture",
       type: "youtube",
       status: "processing",
-      stageText: "Streaming audio to Groq Whisper AI...",
-      progress: 25,
+      stageText: "Connecting to YouTube gateway...",
+      progress: 10,
     };
 
     setRows((r) => [newRow, ...r]);
     setUrl("");
-
-    const pInterval = setInterval(() => {
-      setRows((prev) =>
-        prev.map((item) => {
-          if (item.id !== rowId || item.status !== "processing") return item;
-          if (item.progress < 45) {
-            return { ...item, progress: 45, stageText: "Running Whisper speech recognition..." };
-          } else if (item.progress < 75) {
-            return { ...item, progress: 75, stageText: "Chunking second-by-second dialogue..." };
-          } else if (item.progress < 90) {
-            return { ...item, progress: 90, stageText: "Indexing dense vectors into ChromaDB..." };
-          }
-          return item;
-        })
-      );
-    }, 700);
 
     if (kbId) {
       try {
@@ -260,7 +270,7 @@ export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean
           payload.client_transcript_text = transcriptText.trim();
         }
 
-        const res = await fetch(`${API_BASE}/sources/youtube`, {
+        const res = await fetch(`${API_BASE}/sources/youtube/stream`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -269,50 +279,82 @@ export function AddSourceModal({ open, onClose, kbId, onAdded }: { open: boolean
           body: JSON.stringify(payload),
         });
 
-        clearInterval(pInterval);
-
-        if (res.ok) {
-          const data = await res.json().catch(() => ({}));
-          setRows((prev) =>
-            prev.map((item) =>
-              item.id === rowId
-                ? {
-                    ...item,
-                    name: data.name || item.name,
-                    status: "ready",
-                    stageText: `Ready (${data.chunk_count || "All"} verbatim chunks indexed)`,
-                    progress: 100,
-                  }
-                : item
-            )
-          );
-          toast("YouTube video processed and indexed with 100% verbatim dialogue!");
-          onAdded?.();
-        } else {
+        if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          setRows((prev) =>
-            prev.map((item) =>
-              item.id === rowId
-                ? { ...item, status: "failed", stageText: err.detail || "Failed to process video", progress: 100 }
-                : item
-            )
-          );
-          toast(err.detail || "Failed to process YouTube video", "error");
+          throw new Error(err.detail || `Server error (${res.status})`);
+        }
+
+        const reader = res.body?.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (trimmed.startsWith("data: ")) {
+                try {
+                  const eventData = JSON.parse(trimmed.slice(6));
+                  if (eventData.stage === "error") {
+                    setRows((prev) =>
+                      prev.map((item) =>
+                        item.id === rowId
+                          ? { ...item, status: "failed", stageText: eventData.message, progress: 100 }
+                          : item
+                      )
+                    );
+                    toast(eventData.message, "error");
+                  } else if (eventData.stage === "complete") {
+                    setRows((prev) =>
+                      prev.map((item) =>
+                        item.id === rowId
+                          ? {
+                              ...item,
+                              name: eventData.source?.name || item.name,
+                              status: "ready",
+                              stageText: eventData.message,
+                              progress: 100,
+                            }
+                          : item
+                      )
+                    );
+                    toast("YouTube video processed and indexed with verbatim dialogue!");
+                    onAdded?.();
+                  } else {
+                    setRows((prev) =>
+                      prev.map((item) =>
+                        item.id === rowId
+                          ? {
+                              ...item,
+                              stageText: eventData.message || item.stageText,
+                              progress: eventData.progress !== undefined ? eventData.progress : item.progress,
+                            }
+                          : item
+                      )
+                    );
+                  }
+                } catch (e) {}
+              }
+            }
+          }
         }
       } catch (err: any) {
-        clearInterval(pInterval);
         setRows((prev) =>
           prev.map((item) =>
-            item.id === rowId ? { ...item, status: "failed", stageText: "Network error", progress: 100 } : item
+            item.id === rowId ? { ...item, status: "failed", stageText: err.message || "Network error", progress: 100 } : item
           )
         );
-        toast("Network error during YouTube processing", "error");
+        toast(err.message || "Network error during YouTube processing", "error");
       } finally {
         setUploading(false);
       }
     } else {
       setTimeout(() => {
-        clearInterval(pInterval);
         setRows((r) =>
           r.map((item) => (item.id === rowId ? { ...item, status: "ready", stageText: "Ready", progress: 100 } : item))
         );

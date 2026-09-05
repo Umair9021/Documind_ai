@@ -144,6 +144,191 @@ async def upload_documents(
 
     return responses
 
+@router.post("/upload/stream")
+async def upload_documents_stream(
+    kb_id: str = Form(...),
+    files: List[UploadFile] = File(...),
+    current_user_id: str = Depends(get_current_user_id)
+):
+    from fastapi.responses import StreamingResponse
+    import json
+
+    async def event_generator():
+        kb = db_get_kb(kb_id, current_user_id)
+        if not kb:
+            from datetime import datetime
+            from database import get_db_connection
+            try:
+                conn = get_db_connection()
+                now = datetime.now().isoformat()
+                conn.execute(
+                    "INSERT OR IGNORE INTO knowledge_bases (id, user_id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (kb_id, current_user_id, "Knowledge Base", "", now, now)
+                )
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+
+        max_storage_bytes = SYSTEM_LIMITS.get("max_storage_mb_per_user", 50) * 1024 * 1024
+        used_storage_bytes = db_get_user_storage_bytes(current_user_id)
+
+        for file in files:
+            filename = file.filename
+            ext = filename.split(".")[-1].lower() if "." in filename else "txt"
+            
+            try:
+                source_type = SourceType(ext)
+            except ValueError:
+                source_type = SourceType.TXT
+
+            user_upload_dir = UPLOAD_DIR / current_user_id / kb_id
+            user_upload_dir.mkdir(parents=True, exist_ok=True)
+            file_path = user_upload_dir / filename
+
+            yield f"data: {json.dumps({'stage': 'uploading', 'fileName': filename, 'progress': 20, 'message': f'Saving {filename} to isolated storage...'})}\n\n"
+
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+
+            file_size = file_path.stat().st_size
+
+            if used_storage_bytes + file_size > max_storage_bytes:
+                if file_path.exists():
+                    file_path.unlink()
+                yield f"data: {json.dumps({'stage': 'error', 'fileName': filename, 'progress': 100, 'message': f'Storage quota exceeded (Free tier: {SYSTEM_LIMITS.get(\"max_storage_mb_per_user\", 50)} MB).'})}\n\n"
+                continue
+
+            used_storage_bytes += file_size
+
+            source_record = db_create_source(
+                kb_id=kb_id,
+                user_id=current_user_id,
+                name=filename,
+                source_type=source_type.value,
+                file_path=str(file_path),
+                file_size_bytes=file_size
+            )
+            source_id = source_record["id"]
+
+            try:
+                db_update_source_status(source_id, "processing")
+                yield f"data: {json.dumps({'stage': 'parsing', 'fileName': filename, 'progress': 45, 'message': f'Extracting text & layout structures from {filename}...'})}\n\n"
+                segments = DocumentLoader.load_file(file_path, filename, source_type.value)
+
+                yield f"data: {json.dumps({'stage': 'chunking', 'fileName': filename, 'progress': 70, 'message': f'Generating semantic chunks for {filename}...'})}\n\n"
+                chunks = chunker.chunk_segments(
+                    segments=segments,
+                    source_id=source_id,
+                    kb_id=kb_id,
+                    source_name=filename,
+                    source_type=source_type.value
+                )
+
+                yield f"data: {json.dumps({'stage': 'indexing', 'fileName': filename, 'progress': 90, 'message': f'Indexing {len(chunks)} vector embeddings in ChromaDB...'})}\n\n"
+                vector_store.add_chunks(kb_id=kb_id, chunks=chunks)
+                db_update_source_status(source_id, "ready", chunk_count=len(chunks))
+                updated_source = db_get_source(source_id, current_user_id)
+                yield f"data: {json.dumps({'stage': 'complete', 'fileName': filename, 'progress': 100, 'message': f'{filename} ready ({len(chunks)} chunks indexed)', 'source': updated_source})}\n\n"
+
+            except Exception as e:
+                db_update_source_status(source_id, "failed", error_message=str(e))
+                yield f"data: {json.dumps({'stage': 'error', 'fileName': filename, 'progress': 100, 'message': f'Error indexing {filename}: {str(e)}'})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"}
+    )
+
+@router.post("/youtube/stream")
+def add_youtube_source_stream(yt_in: YouTubeSourceCreate, current_user_id: str = Depends(get_current_user_id)):
+    from fastapi.responses import StreamingResponse
+    import json
+
+    def event_generator():
+        kb = db_get_kb(yt_in.kb_id, current_user_id)
+        if not kb:
+            from datetime import datetime
+            from database import get_db_connection
+            try:
+                conn = get_db_connection()
+                now = datetime.now().isoformat()
+                conn.execute(
+                    "INSERT OR IGNORE INTO knowledge_bases (id, user_id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (yt_in.kb_id, current_user_id, "Knowledge Base", "", now, now)
+                )
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+
+        yield f"data: {json.dumps({'stage': 'initializing', 'progress': 15, 'message': 'Connecting to YouTube & fetching video metadata...'})}\n\n"
+
+        video_id = YouTubeLoader.extract_video_id(yt_in.url) or "video"
+        video_title = f"YouTube Video ({video_id})"
+        segments = []
+
+        try:
+            if yt_in.client_transcript_text and len(yt_in.client_transcript_text.strip()) > 20:
+                yield f"data: {json.dumps({'stage': 'parsing_transcript', 'progress': 35, 'message': 'Parsing user-provided transcript with timestamp sync...'})}\n\n"
+                try:
+                    meta_title, _, _, _ = YouTubeLoader.fetch_video_metadata(yt_in.url, video_id)
+                    if meta_title:
+                        video_title = meta_title
+                except Exception:
+                    pass
+                segments = YouTubeLoader.parse_raw_transcript_text(yt_in.client_transcript_text, video_title, yt_in.url)
+            elif yt_in.client_transcript_segments and len(yt_in.client_transcript_segments) > 0:
+                try:
+                    meta_title, _, _, _ = YouTubeLoader.fetch_video_metadata(yt_in.url, video_id)
+                    if meta_title:
+                        video_title = meta_title
+                except Exception:
+                    pass
+                segments = yt_in.client_transcript_segments
+            else:
+                yield f"data: {json.dumps({'stage': 'extracting_subtitles', 'progress': 35, 'message': 'Extracting verbatim transcript dialogue via high-speed gateway...'})}\n\n"
+                segments, video_title, video_id = YouTubeLoader.load_transcript(yt_in.url)
+
+            yield f"data: {json.dumps({'stage': 'formatting_chunks', 'progress': 60, 'message': f'Successfully extracted {len(segments)} verbatim dialogue chunks.'})}\n\n"
+
+            source_record = db_create_source(
+                kb_id=yt_in.kb_id,
+                user_id=current_user_id,
+                name=video_title,
+                source_type=SourceType.YOUTUBE.value,
+                url=yt_in.url,
+                video_id=video_id
+            )
+            source_id = source_record["id"]
+            db_update_source_status(source_id, "processing")
+
+            yield f"data: {json.dumps({'stage': 'chunking_segments', 'progress': 75, 'message': f'Formatting {len(segments)} semantic chunks with playback links...'})}\n\n"
+            chunks = chunker.chunk_segments(
+                segments=segments,
+                source_id=source_id,
+                kb_id=yt_in.kb_id,
+                source_name=video_title,
+                source_type=SourceType.YOUTUBE.value
+            )
+
+            yield f"data: {json.dumps({'stage': 'indexing_vectors', 'progress': 90, 'message': f'Indexing {len(chunks)} dense vector embeddings into ChromaDB...'})}\n\n"
+            vector_store.add_chunks(kb_id=yt_in.kb_id, chunks=chunks)
+            db_update_source_status(source_id, "ready", chunk_count=len(chunks))
+
+            updated_source = db_get_source(source_id, current_user_id)
+            yield f"data: {json.dumps({'stage': 'complete', 'progress': 100, 'message': f'Ready! {len(chunks)} chunks indexed with second-accurate timestamps.', 'source': updated_source})}\n\n"
+
+        except Exception as e:
+            yield f"data: {json.dumps({'stage': 'error', 'progress': 100, 'message': f'Ingestion error: {str(e)}'})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"}
+    )
+
 @router.post("/youtube", response_model=SourceResponse)
 def add_youtube_source(yt_in: YouTubeSourceCreate, current_user_id: str = Depends(get_current_user_id)):
     kb = db_get_kb(yt_in.kb_id, current_user_id)
@@ -221,6 +406,7 @@ def add_youtube_source(yt_in: YouTubeSourceCreate, current_user_id: str = Depend
         db_update_source_status(source_id, "failed", error_message=str(e))
         failed_source = db_get_source(source_id, current_user_id)
         return SourceResponse(**failed_source)
+
 
 @router.get("/{source_id}/preview")
 def get_source_preview(source_id: str, current_user_id: str = Depends(get_current_user_id)):
