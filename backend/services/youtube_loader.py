@@ -179,14 +179,7 @@ Output ONLY valid JSON matching this schema:
             return []
 
     @staticmethod
-    def load_transcript(url: str) -> Tuple[List[Dict[str, Any]], str, str]:
-        video_id = YouTubeLoader.extract_video_id(url)
-        if not video_id:
-            raise ValueError("Invalid YouTube URL. Please provide a standard YouTube video link.")
-
-        video_title, author, description, chapters = YouTubeLoader.fetch_video_metadata(url, video_id)
-        segments: List[Dict[str, Any]] = []
-
+    def get_proxy_candidates() -> List[Optional[str]]:
         try:
             from config import PROXY_URL, PROXY_ROTATING_URL
         except Exception:
@@ -197,12 +190,13 @@ Output ONLY valid JSON matching this schema:
                 PROXY_URL = os.getenv("PROXY_URL", "http://qaxlrzux:r9pcj6x9c8la@31.59.20.176:6754")
                 PROXY_ROTATING_URL = os.getenv("PROXY_ROTATING_URL", "http://qaxlrzux-rotate:r9pcj6x9c8la@p.webshare.io:80")
 
-        proxy_candidates = []
+        candidates = []
         if PROXY_URL:
-            proxy_candidates.append(PROXY_URL)
-        if PROXY_ROTATING_URL and PROXY_ROTATING_URL not in proxy_candidates:
-            proxy_candidates.append(PROXY_ROTATING_URL)
-        for bp in [
+            candidates.append(PROXY_URL)
+        if PROXY_ROTATING_URL and PROXY_ROTATING_URL not in candidates:
+            candidates.append(PROXY_ROTATING_URL)
+
+        backup_nodes = [
             "http://qaxlrzux:r9pcj6x9c8la@191.96.254.138:6185",
             "http://qaxlrzux:r9pcj6x9c8la@31.59.20.176:6754",
             "http://qaxlrzux:r9pcj6x9c8la@45.38.107.97:6014",
@@ -211,14 +205,22 @@ Output ONLY valid JSON matching this schema:
             "http://qaxlrzux:r9pcj6x9c8la@198.23.243.226:6361",
             "http://qaxlrzux:r9pcj6x9c8la@38.154.185.97:6370",
             None
-        ]:
-            if bp not in proxy_candidates:
-                proxy_candidates.append(bp)
+        ]
+        for b in backup_nodes:
+            if b not in candidates:
+                candidates.append(b)
+        return candidates
 
-        # 1. Primary: yt-dlp direct subtitle extraction through proxy pool
+    # ==========================================
+    # TIER 1: yt-dlp Direct Subtitle Extraction via Proxy Pool
+    # ==========================================
+    @staticmethod
+    def extract_tier_1_ytdlp(url: str, video_id: str, video_title: str) -> List[Dict[str, Any]]:
+        """Tier 1: High-speed subtitle extraction using yt-dlp routed through residential proxy pool."""
+        import yt_dlp
+        proxy_candidates = YouTubeLoader.get_proxy_candidates()
         for p_cand in proxy_candidates:
             try:
-                import yt_dlp
                 ydl_opts = {
                     'skip_download': True,
                     'writesubtitles': True,
@@ -234,11 +236,7 @@ Output ONLY valid JSON matching this schema:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
                     if info:
-                        if not video_title or video_title.startswith("YouTube Video"):
-                            video_title = info.get("title", video_title)
-                        author = info.get("uploader", author)
                         subs = info.get("subtitles") or info.get("automatic_captions") or {}
-
                         en_tracks = []
                         for lang_key in ['en', 'en-orig', 'en-US', 'en-GB']:
                             if lang_key in subs:
@@ -253,18 +251,17 @@ Output ONLY valid JSON matching this schema:
                         if target_track and target_track.get("url"):
                             sub_req = urllib.request.Request(target_track["url"], headers={"User-Agent": "Mozilla/5.0"})
                             if p_cand:
-                                proxy_handler = urllib.request.ProxyHandler({'http': p_cand, 'https': p_cand})
-                                opener = urllib.request.build_opener(proxy_handler)
+                                opener = urllib.request.build_opener(urllib.request.ProxyHandler({'http': p_cand, 'https': p_cand}))
                                 sub_resp = opener.open(sub_req, timeout=12)
                             else:
                                 sub_resp = urllib.request.urlopen(sub_req, timeout=12)
 
                             with sub_resp:
                                 raw_sub = sub_resp.read().decode("utf-8")
-
                                 if target_track.get("ext") == "json3" or '"events"' in raw_sub[:300]:
                                     data = json.loads(raw_sub)
                                     events = data.get("events", [])
+                                    segments = []
                                     current_block = []
                                     current_sec = 0.0
                                     for ev in events:
@@ -285,7 +282,8 @@ Output ONLY valid JSON matching this schema:
                                                 "timestamp": ts_str,
                                                 "timestamp_seconds": current_sec,
                                                 "section_name": f"{video_title} @ {ts_str}",
-                                                "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_sec)}s"
+                                                "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_sec)}s",
+                                                "tier": "Tier 1 (yt-dlp Direct Subtitles)"
                                             })
                                             current_block = []
 
@@ -297,137 +295,163 @@ Output ONLY valid JSON matching this schema:
                                             "timestamp": ts_str,
                                             "timestamp_seconds": current_sec,
                                             "section_name": f"{video_title} @ {ts_str}",
-                                            "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_sec)}s"
+                                            "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_sec)}s",
+                                            "tier": "Tier 1 (yt-dlp Direct Subtitles)"
                                         })
 
                                     if segments:
-                                        return segments, video_title, video_id
+                                        return segments
             except Exception as e:
-                print(f"[yt-dlp proxy extraction attempt failed for {p_cand}]: {e}")
+                print(f"[Tier 1 yt-dlp error with {p_cand}]: {e}")
+        return []
 
-        # 2. Secondary: InnerTube API direct timedtext extraction with proxy
-        if not segments:
-            for p_cand in proxy_candidates:
-                try:
-                    html_url = f"https://www.youtube.com/watch?v={video_id}"
-                    h_req = urllib.request.Request(
-                        html_url,
-                        headers={
-                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                            "Accept-Language": "en-US,en;q=0.9",
-                            "Cookie": "SOCS=CAESEwgDEgk2OTg1NzQ3MjQaAmVuIAEaBgiA_LyaBg;"
-                        }
+    # ==========================================
+    # TIER 2: InnerTube API TimedText Subtitle Extraction via Proxy
+    # ==========================================
+    @staticmethod
+    def extract_tier_2_innertube(url: str, video_id: str, video_title: str) -> List[Dict[str, Any]]:
+        """Tier 2: Direct Google InnerTube client player API timedtext parser with proxy support."""
+        proxy_candidates = YouTubeLoader.get_proxy_candidates()
+        for p_cand in proxy_candidates:
+            try:
+                html_url = f"https://www.youtube.com/watch?v={video_id}"
+                h_req = urllib.request.Request(
+                    html_url,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Cookie": "SOCS=CAESEwgDEgk2OTg1NzQ3MjQaAmVuIAEaBgiA_LyaBg;"
+                    }
+                )
+                if p_cand:
+                    opener = urllib.request.build_opener(urllib.request.ProxyHandler({'http': p_cand, 'https': p_cand}))
+                    h_resp = opener.open(h_req, timeout=8)
+                else:
+                    h_resp = urllib.request.urlopen(h_req, timeout=8)
+
+                with h_resp as r:
+                    html_txt = r.read().decode("utf-8")
+
+                key_match = re.search(r'"INNERTUBE_API_KEY":"(.*?)"', html_txt)
+                api_key = key_match.group(1) if key_match else ""
+
+                if api_key:
+                    player_url = f"https://www.youtube.com/youtubei/v1/player?key={api_key}"
+                    p_payload = {
+                        "context": {"client": {"clientName": "ANDROID", "clientVersion": "20.10.38"}},
+                        "videoId": video_id
+                    }
+                    p_req = urllib.request.Request(
+                        player_url,
+                        data=json.dumps(p_payload).encode("utf-8"),
+                        headers={"Content-Type": "application/json", "User-Agent": "com.google.android.youtube/20.10.38"},
+                        method="POST"
                     )
                     if p_cand:
-                        opener = urllib.request.build_opener(urllib.request.ProxyHandler({'http': p_cand, 'https': p_cand}))
-                        h_resp = opener.open(h_req, timeout=8)
+                        p_resp = opener.open(p_req, timeout=8)
                     else:
-                        h_resp = urllib.request.urlopen(h_req, timeout=8)
+                        p_resp = urllib.request.urlopen(p_req, timeout=8)
 
-                    with h_resp as r:
-                        html_txt = r.read().decode("utf-8")
+                    with p_resp:
+                        p_data = json.loads(p_resp.read().decode("utf-8"))
+                        captions = p_data.get("captions", {}).get("playerCaptionsTracklistRenderer", {}).get("captionTracks", [])
+                        if captions:
+                            caption_url = captions[0].get("baseUrl")
+                            tt_req = urllib.request.Request(caption_url, headers={"User-Agent": "com.google.android.youtube/20.10.38"})
+                            if p_cand:
+                                tt_resp = opener.open(tt_req, timeout=8)
+                            else:
+                                tt_resp = urllib.request.urlopen(tt_req, timeout=8)
 
-                    key_match = re.search(r'"INNERTUBE_API_KEY":"(.*?)"', html_txt)
-                    api_key = key_match.group(1) if key_match else ""
+                            with tt_resp:
+                                import xml.etree.ElementTree as ET
+                                xml_bytes = tt_resp.read()
+                                root = ET.fromstring(xml_bytes)
+                                p_nodes = root.findall(".//p") or root.findall(".//text")
 
-                    if api_key:
-                        player_url = f"https://www.youtube.com/youtubei/v1/player?key={api_key}"
-                        p_payload = {
-                            "context": {"client": {"clientName": "ANDROID", "clientVersion": "20.10.38"}},
-                            "videoId": video_id
-                        }
-                        p_req = urllib.request.Request(
-                            player_url,
-                            data=json.dumps(p_payload).encode("utf-8"),
-                            headers={"Content-Type": "application/json", "User-Agent": "com.google.android.youtube/20.10.38"},
-                            method="POST"
-                        )
-                        if p_cand:
-                            p_resp = opener.open(p_req, timeout=8)
-                        else:
-                            p_resp = urllib.request.urlopen(p_req, timeout=8)
+                                segments = []
+                                current_block = []
+                                current_sec = 0.0
+                                for node in p_nodes:
+                                    t_ms = float(node.attrib.get('t', 0)) if 't' in node.attrib else float(node.attrib.get('start', 0)) * 1000.0
+                                    line_txt = "".join(node.itertext()).strip()
+                                    if not line_txt:
+                                        continue
+                                    if not current_block:
+                                        current_sec = t_ms / 1000.0
+                                    current_block.append(line_txt)
 
-                        with p_resp:
-                            p_data = json.loads(p_resp.read().decode("utf-8"))
-                            captions = p_data.get("captions", {}).get("playerCaptionsTracklistRenderer", {}).get("captionTracks", [])
-                            if captions:
-                                caption_url = captions[0].get("baseUrl")
-                                tt_req = urllib.request.Request(caption_url, headers={"User-Agent": "com.google.android.youtube/20.10.38"})
-                                if p_cand:
-                                    tt_resp = opener.open(tt_req, timeout=8)
-                                else:
-                                    tt_resp = urllib.request.urlopen(tt_req, timeout=8)
-
-                                with tt_resp:
-                                    import xml.etree.ElementTree as ET
-                                    xml_bytes = tt_resp.read()
-                                    root = ET.fromstring(xml_bytes)
-                                    p_nodes = root.findall(".//p") or root.findall(".//text")
-
-                                    current_block = []
-                                    current_sec = 0.0
-                                    for node in p_nodes:
-                                        t_ms = float(node.attrib.get('t', 0)) if 't' in node.attrib else float(node.attrib.get('start', 0)) * 1000.0
-                                        line_txt = "".join(node.itertext()).strip()
-                                        if not line_txt:
-                                            continue
-                                        if not current_block:
-                                            current_sec = t_ms / 1000.0
-                                        current_block.append(line_txt)
-
-                                        acc = " ".join(current_block)
-                                        if len(acc) >= 350:
-                                            ts_str = YouTubeLoader.format_timestamp(current_sec)
-                                            segments.append({
-                                                "text": acc,
-                                                "timestamp": ts_str,
-                                                "timestamp_seconds": current_sec,
-                                                "section_name": f"{video_title} @ {ts_str}",
-                                                "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_sec)}s"
-                                            })
-                                            current_block = []
-
-                                    if current_block:
-                                        acc = " ".join(current_block)
+                                    acc = " ".join(current_block)
+                                    if len(acc) >= 350:
                                         ts_str = YouTubeLoader.format_timestamp(current_sec)
                                         segments.append({
                                             "text": acc,
                                             "timestamp": ts_str,
                                             "timestamp_seconds": current_sec,
                                             "section_name": f"{video_title} @ {ts_str}",
-                                            "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_sec)}s"
+                                            "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_sec)}s",
+                                            "tier": "Tier 2 (InnerTube API Subtitles)"
                                         })
+                                        current_block = []
 
-                                    if segments:
-                                        return segments, video_title, video_id
-                except Exception as e:
-                    print(f"[InnerTube Captions attempt failed for {p_cand}]: {e}")
+                                if current_block:
+                                    acc = " ".join(current_block)
+                                    ts_str = YouTubeLoader.format_timestamp(current_sec)
+                                    segments.append({
+                                        "text": acc,
+                                        "timestamp": ts_str,
+                                        "timestamp_seconds": current_sec,
+                                        "section_name": f"{video_title} @ {ts_str}",
+                                        "url": f"https://www.youtube.com/watch?v={video_id}&t={int(current_sec)}s",
+                                        "tier": "Tier 2 (InnerTube API Subtitles)"
+                                    })
 
-        # 3. Audio ASR Fallback: Transcribe audio stream with Groq Whisper-Large-V3 (FFmpeg compressed)
-        if not segments:
-            try:
-                from services.whisper_service import WhisperService
-                whisper_segs = WhisperService.transcribe_youtube_audio(url, video_title, video_id, proxy=PROXY_URL)
-                if whisper_segs and len(whisper_segs) > 0:
-                    segments = whisper_segs
-                    return segments, video_title, video_id
+                                if segments:
+                                    return segments
             except Exception as e:
-                print(f"[Groq Whisper ASR Fallback Error] {e}")
+                print(f"[Tier 2 InnerTube error with {p_cand}]: {e}")
+        return []
 
-        # 4. AI-powered multi-chapter knowledge synthesis fallback
-        if not segments:
-            ai_segments = YouTubeLoader.synthesize_video_knowledge_groq(video_title, author, video_id, description)
-            if ai_segments:
-                segments = ai_segments
-            elif description:
-                segments.append({
-                    "text": f"Video Title: {video_title}\nCreator / Channel: {author}\nLink: https://www.youtube.com/watch?v={video_id}\n\nComprehensive Video Overview & Summary:\n{description}",
-                    "timestamp": "00:00",
-                    "timestamp_seconds": 0.0,
-                    "section_name": f"{video_title} - Overview",
-                    "url": f"https://www.youtube.com/watch?v={video_id}"
-                })
+    # ==========================================
+    # TIER 3: Audio Stream Download + FFmpeg + Groq Whisper Large V3
+    # ==========================================
+    @staticmethod
+    def extract_tier_3_whisper(url: str, video_id: str, video_title: str) -> List[Dict[str, Any]]:
+        """Tier 3: Downloads audio stream, compresses with FFmpeg (24kbps mono MP3), and transcribes with Groq Whisper."""
+        try:
+            from services.whisper_service import WhisperService
+            segments = WhisperService.transcribe_youtube_audio(url, video_title, video_id)
+            if segments:
+                for seg in segments:
+                    seg["tier"] = "Tier 3 (Groq Whisper-Large-V3 ASR)"
+                return segments
+        except Exception as e:
+            print(f"[Tier 3 Groq Whisper Error]: {e}")
+        return []
 
+    # ==========================================
+    # TIER 4: Groq AI Multi-Chapter Deep Knowledge Synthesis
+    # ==========================================
+    @staticmethod
+    def extract_tier_4_synthesis(video_title: str, author: str, video_id: str, description: str = "", chapters: List[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+        """Tier 4: Synthesizes rich multi-chapter knowledge breakdown using Groq LLM from metadata and video description."""
+        ai_segments = YouTubeLoader.synthesize_video_knowledge_groq(video_title, author, video_id, description)
+        if ai_segments:
+            for seg in ai_segments:
+                seg["tier"] = "Tier 4 (Groq Multi-Chapter AI Synthesis)"
+            return ai_segments
+
+        segments = []
+        if description:
+            segments.append({
+                "text": f"Video Title: {video_title}\nCreator / Channel: {author}\nLink: https://www.youtube.com/watch?v={video_id}\n\nComprehensive Video Overview & Summary:\n{description}",
+                "timestamp": "00:00",
+                "timestamp_seconds": 0.0,
+                "section_name": f"{video_title} - Overview",
+                "url": f"https://www.youtube.com/watch?v={video_id}",
+                "tier": "Tier 4 (Video Description & Chapters)"
+            })
+            if chapters:
                 for ch in chapters:
                     ch_ts = ch["timestamp"]
                     ch_title = ch["title"]
@@ -437,18 +461,58 @@ Output ONLY valid JSON matching this schema:
                         "timestamp": ch_ts,
                         "timestamp_seconds": sec,
                         "section_name": f"{video_title} @ {ch_ts} ({ch_title})",
-                        "url": f"https://www.youtube.com/watch?v={video_id}&t={int(sec)}s"
+                        "url": f"https://www.youtube.com/watch?v={video_id}&t={int(sec)}s",
+                        "tier": "Tier 4 (Video Description & Chapters)"
                     })
-            else:
-                segments.append({
-                    "text": f"Video Title: {video_title}\nCreator: {author}\nLink: https://www.youtube.com/watch?v={video_id}\n\nContent Notes: Comprehensive video presentation by {author} discussing {video_title} and technology developments.",
-                    "timestamp": "00:00",
-                    "timestamp_seconds": 0.0,
-                    "section_name": f"{video_title} - Video Summary",
-                    "url": f"https://www.youtube.com/watch?v={video_id}"
-                })
+        else:
+            segments.append({
+                "text": f"Video Title: {video_title}\nCreator: {author}\nLink: https://www.youtube.com/watch?v={video_id}\n\nContent Notes: Comprehensive video presentation by {author} discussing {video_title} and technology developments.",
+                "timestamp": "00:00",
+                "timestamp_seconds": 0.0,
+                "section_name": f"{video_title} - Video Summary",
+                "url": f"https://www.youtube.com/watch?v={video_id}",
+                "tier": "Tier 4 (Video Metadata Overview)"
+            })
+        return segments
 
+    # ==========================================
+    # Unified 4-Tier Automated Failover Loader
+    # ==========================================
+    @staticmethod
+    def load_transcript(url: str) -> Tuple[List[Dict[str, Any]], str, str]:
+        video_id = YouTubeLoader.extract_video_id(url)
+        if not video_id:
+            raise ValueError("Invalid YouTube URL. Please provide a standard YouTube video link.")
+
+        video_title, author, description, chapters = YouTubeLoader.fetch_video_metadata(url, video_id)
+
+        # 1. Try Tier 1: yt-dlp Direct Subtitles with Proxy
+        print(f"[Loader] Attempting Tier 1 (yt-dlp Subtitles with Proxy)...")
+        segments = YouTubeLoader.extract_tier_1_ytdlp(url, video_id, video_title)
+        if segments:
+            print(f"[Loader] Tier 1 SUCCESS: Extracted {len(segments)} chunks!")
+            return segments, video_title, video_id
+
+        # 2. Try Tier 2: InnerTube API TimedText with Proxy
+        print(f"[Loader] Attempting Tier 2 (InnerTube API Subtitles with Proxy)...")
+        segments = YouTubeLoader.extract_tier_2_innertube(url, video_id, video_title)
+        if segments:
+            print(f"[Loader] Tier 2 SUCCESS: Extracted {len(segments)} chunks!")
+            return segments, video_title, video_id
+
+        # 3. Try Tier 3: Audio Stream Download + FFmpeg + Groq Whisper Large V3
+        print(f"[Loader] Attempting Tier 3 (Groq Whisper-Large-V3 ASR Pipeline)...")
+        segments = YouTubeLoader.extract_tier_3_whisper(url, video_id, video_title)
+        if segments:
+            print(f"[Loader] Tier 3 SUCCESS: Extracted {len(segments)} chunks!")
+            return segments, video_title, video_id
+
+        # 4. Try Tier 4: Groq AI Multi-Chapter Deep Knowledge Synthesis
+        print(f"[Loader] Attempting Tier 4 (Groq Multi-Chapter AI Synthesis)...")
+        segments = YouTubeLoader.extract_tier_4_synthesis(video_title, author, video_id, description, chapters)
+        print(f"[Loader] Tier 4 SUCCESS: Generated {len(segments)} knowledge segments!")
         return segments, video_title, video_id
+
 
 
     @staticmethod
