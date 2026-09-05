@@ -196,7 +196,14 @@ async def upload_documents_stream(
             if used_storage_bytes + file_size > max_storage_bytes:
                 if file_path.exists():
                     file_path.unlink()
-                yield f"data: {json.dumps({'stage': 'error', 'fileName': filename, 'progress': 100, 'message': f'Storage quota exceeded (Free tier: {SYSTEM_LIMITS.get(\"max_storage_mb_per_user\", 50)} MB).'})}\n\n"
+                max_mb = SYSTEM_LIMITS.get("max_storage_mb_per_user", 50)
+                err_payload = {
+                    "stage": "error",
+                    "fileName": filename,
+                    "progress": 100,
+                    "message": f"Storage quota exceeded (Free tier: {max_mb} MB)."
+                }
+                yield f"data: {json.dumps(err_payload)}\n\n"
                 continue
 
             used_storage_bytes += file_size
